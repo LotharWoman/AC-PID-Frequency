@@ -1,0 +1,138 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AC PID Frequency einrichten",
+        "description": "Der Regler täuscht der Klimaanlage einen externen Raumtemperatursensor vor und pendelt sie damit auf eine Ziel-Frequenz ein. Wähle das Master-Innengerät (bei Multisplit das zuerst eingeschaltete Gerät) und die Entität mit der Kompressor-Frequenz.",
+        "data": {
+          "name": "Name",
+          "climate_entity": "Klimaanlage (Master-Innengerät)",
+          "frequency_entity": "Kompressor-Frequenz (Hz)",
+          "indoor_units": "Weitere Innengeräte (nur Anzeige)"
+        },
+        "data_description": {
+          "climate_entity": "Diese Entität wird gelesen (Solltemperatur, Betriebsart) und in der Karte bedient. Ihre Integration muss einen externen Raumsensor unterstützen; den erzeugten Sensor trägst du dort anschließend ein.",
+          "frequency_entity": "Entität, die die aktuelle Kompressor-Frequenz als Zahl liefert.",
+          "indoor_units": "Optional. Werden in der Karte klein und ohne Bedienmöglichkeit angezeigt."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Für diese Klimaanlage gibt es bereits einen AC-PID-Frequency-Regler."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "AC PID Frequency konfigurieren",
+        "menu_options": {
+          "entities": "Entitäten ändern",
+          "tuning": "Regelparameter ändern"
+        }
+      },
+      "entities": {
+        "title": "Entitäten",
+        "data": {
+          "climate_entity": "Klimaanlage (Master-Innengerät)",
+          "frequency_entity": "Kompressor-Frequenz (Hz)",
+          "indoor_units": "Weitere Innengeräte (nur Anzeige)"
+        },
+        "data_description": {
+          "climate_entity": "Gelesen wird Solltemperatur und Betriebsart dieser Entität.",
+          "frequency_entity": "Entität, die die aktuelle Kompressor-Frequenz als Zahl liefert.",
+          "indoor_units": "Optional. Nur Anzeige in der Karte."
+        }
+      },
+      "tuning": {
+        "title": "Regelparameter",
+        "description": "Die Standardwerte entsprechen der bewährten YAML-Regelung. Die Notbremse-Frequenz und die Ziel-Frequenz stellst du direkt über die Entitäten bzw. die Karte ein.",
+        "data": {
+          "interval_s": "Regeltakt",
+          "fault_timeout_min": "Fehler-Wartezeit",
+          "deadband_hz": "Totband",
+          "offset_raise": "Offset bei zu wenig Hz",
+          "offset_lower": "Offset bei zu viel Hz",
+          "offset_brake": "Offset bei Notbremse",
+          "hold_limit": "Max. gehaltener Offset im Totband",
+          "step_raise": "Max. Änderung je Minute (zu wenig Hz)",
+          "step_normal": "Max. Änderung je Minute (sonst)",
+          "max_offset": "Sicherheitsgrenze um die Solltemperatur",
+          "hunting_hz": "Pendel-Schwelle",
+          "factor_min": "Lernfaktor: Minimum",
+          "factor_max": "Lernfaktor: Maximum",
+          "factor_floor": "Lernfaktor: Rückkehrwert außerhalb des Totbands",
+          "factor_down": "Lernfaktor: Absenkung bei Pendeln",
+          "factor_up": "Lernfaktor: Anhebung im Totband"
+        },
+        "data_description": {
+          "interval_s": "Sekunden zwischen zwei Regelschritten. 60 s entspricht der YAML-Vorlage; die Schrittweiten je Minute werden automatisch umgerechnet.",
+          "fault_timeout_min": "Fehlen Solltemperatur oder Hz-Wert, wird der letzte Sensorwert so lange gehalten. Danach wird der Sensor nicht verfügbar und die Anlage nutzt wieder ihren eigenen Innensensor.",
+          "deadband_hz": "Abweichung vom Ziel, innerhalb derer der Offset gehalten wird.",
+          "offset_raise": "Um so viel wird der Sensor kälter als Soll gestellt, wenn die Frequenz zu niedrig ist (Anlage heizt stärker).",
+          "offset_lower": "Um so viel wird der Sensor wärmer als Soll gestellt, wenn die Frequenz zu hoch ist. Wirkt sofort.",
+          "offset_brake": "Um so viel wird der Sensor wärmer als Soll gestellt, wenn die Notbremse-Frequenz überschritten ist.",
+          "hold_limit": "Im Totband wird der letzte Offset gehalten, aber höchstens bis zu diesem Wert.",
+          "step_raise": "Höchste Änderung des Sensorwerts je Minute, wenn die Frequenz zu niedrig ist.",
+          "step_normal": "Höchste Änderung des Sensorwerts je Minute in allen anderen Fällen.",
+          "max_offset": "Der Sensorwert bleibt immer innerhalb Soll ± diesem Wert.",
+          "hunting_hz": "Frequenzsprung je Takt, ab dem bei Richtungswechsel Pendeln erkannt wird.",
+          "factor_min": "Untergrenze des selbstlernenden Faktors, der den Offset skaliert.",
+          "factor_max": "Obergrenze des Lernfaktors.",
+          "factor_floor": "Außerhalb des Totbands kehrt der Faktor mindestens auf diesen Wert zurück.",
+          "factor_down": "Um so viel sinkt der Faktor bei erkanntem Pendeln.",
+          "factor_up": "Um so viel steigt der Faktor je Takt im Totband."
+        }
+      }
+    },
+    "error": {
+      "invalid_factor_range": "Es muss gelten: Minimum ≤ Rückkehrwert ≤ Maximum."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "temperature": {
+        "name": "Simulierte Raumtemperatur"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "off": "Regler aus",
+          "idle": "Wartet (kein Heizbetrieb)",
+          "raise": "Frequenz erhöhen",
+          "lower": "Frequenz senken",
+          "hold": "Im Zielbereich",
+          "brake": "Notbremse",
+          "waiting": "Daten fehlen (Wert gehalten)",
+          "fault": "Fehler (Sensor nicht verfügbar)"
+        }
+      },
+      "offset": {
+        "name": "Offset zur Solltemperatur"
+      },
+      "learning_factor": {
+        "name": "Lernfaktor"
+      },
+      "frequency_error": {
+        "name": "Frequenzabweichung"
+      }
+    },
+    "number": {
+      "target_hz": {
+        "name": "Ziel-Frequenz"
+      },
+      "brake_hz": {
+        "name": "Notbremse-Frequenz"
+      }
+    },
+    "switch": {
+      "enabled": {
+        "name": "Hz-Regelung"
+      }
+    },
+    "button": {
+      "reset_learning": {
+        "name": "Lernfaktor zurücksetzen"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "domain": "ac_pid_frequency",
+  "name": "AC PID Frequency",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["frontend", "http"],
+  "documentation": "https://github.com/DEIN-GITHUB-NAME/DEIN-REPO",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/DEIN-GITHUB-NAME/DEIN-REPO/issues",
+  "requirements": [],
+  "version": "2.0.0"
+}

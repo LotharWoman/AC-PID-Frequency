@@ -1,0 +1,138 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up AC PID Frequency",
+        "description": "The controller feeds the air conditioner a simulated external room temperature sensor and thereby steers it to a target compressor frequency. Pick the master indoor unit (for multi-split: the unit switched on first) and the entity that reports the compressor frequency.",
+        "data": {
+          "name": "Name",
+          "climate_entity": "Air conditioner (master indoor unit)",
+          "frequency_entity": "Compressor frequency (Hz)",
+          "indoor_units": "Additional indoor units (display only)"
+        },
+        "data_description": {
+          "climate_entity": "This entity is read (target temperature, mode) and operated in the card. Its integration must support an external room sensor; enter the generated sensor there afterwards.",
+          "frequency_entity": "Entity that reports the current compressor frequency as a number.",
+          "indoor_units": "Optional. Shown small and read-only in the card."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "An AC PID Frequency controller already exists for this air conditioner."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure AC PID Frequency",
+        "menu_options": {
+          "entities": "Change entities",
+          "tuning": "Change control parameters"
+        }
+      },
+      "entities": {
+        "title": "Entities",
+        "data": {
+          "climate_entity": "Air conditioner (master indoor unit)",
+          "frequency_entity": "Compressor frequency (Hz)",
+          "indoor_units": "Additional indoor units (display only)"
+        },
+        "data_description": {
+          "climate_entity": "Target temperature and mode are read from this entity.",
+          "frequency_entity": "Entity that reports the current compressor frequency as a number.",
+          "indoor_units": "Optional. Display only in the card."
+        }
+      },
+      "tuning": {
+        "title": "Control parameters",
+        "description": "Defaults match the proven YAML controller. Target frequency and emergency-brake frequency are set directly via their entities or the card.",
+        "data": {
+          "interval_s": "Control interval",
+          "fault_timeout_min": "Fault timeout",
+          "deadband_hz": "Dead band",
+          "offset_raise": "Offset when frequency too low",
+          "offset_lower": "Offset when frequency too high",
+          "offset_brake": "Offset on emergency brake",
+          "hold_limit": "Max. held offset inside dead band",
+          "step_raise": "Max. change per minute (frequency too low)",
+          "step_normal": "Max. change per minute (otherwise)",
+          "max_offset": "Safety limit around target temperature",
+          "hunting_hz": "Hunting threshold",
+          "factor_min": "Learning factor: minimum",
+          "factor_max": "Learning factor: maximum",
+          "factor_floor": "Learning factor: recovery value outside dead band",
+          "factor_down": "Learning factor: decrease when hunting",
+          "factor_up": "Learning factor: increase inside dead band"
+        },
+        "data_description": {
+          "interval_s": "Seconds between two control steps. 60 s equals the YAML original; the per-minute step sizes are scaled automatically.",
+          "fault_timeout_min": "If target temperature or Hz value is missing, the last sensor value is held for this long. Afterwards the sensor becomes unavailable and the AC uses its own indoor sensor again.",
+          "deadband_hz": "Deviation from the target within which the offset is held.",
+          "offset_raise": "The sensor is set this much colder than the setpoint when the frequency is too low (AC heats harder).",
+          "offset_lower": "The sensor is set this much warmer than the setpoint when the frequency is too high. Acts immediately.",
+          "offset_brake": "The sensor is set this much warmer than the setpoint when the emergency-brake frequency is exceeded.",
+          "hold_limit": "Inside the dead band the last offset is held, but at most up to this value.",
+          "step_raise": "Largest change of the sensor value per minute when the frequency is too low.",
+          "step_normal": "Largest change of the sensor value per minute in all other cases.",
+          "max_offset": "The sensor value always stays within setpoint ± this value.",
+          "hunting_hz": "Frequency jump per step above which a direction change counts as hunting.",
+          "factor_min": "Lower limit of the self-learning factor that scales the offset.",
+          "factor_max": "Upper limit of the learning factor.",
+          "factor_floor": "Outside the dead band the factor returns to at least this value.",
+          "factor_down": "The factor drops by this much when hunting is detected.",
+          "factor_up": "The factor rises by this much per step inside the dead band."
+        }
+      }
+    },
+    "error": {
+      "invalid_factor_range": "Must satisfy: minimum ≤ recovery value ≤ maximum."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "temperature": {
+        "name": "Simulated room temperature"
+      },
+      "status": {
+        "name": "Status",
+        "state": {
+          "off": "Controller off",
+          "idle": "Waiting (not heating)",
+          "raise": "Raising frequency",
+          "lower": "Lowering frequency",
+          "hold": "On target",
+          "brake": "Emergency brake",
+          "waiting": "Data missing (value held)",
+          "fault": "Fault (sensor unavailable)"
+        }
+      },
+      "offset": {
+        "name": "Offset to setpoint"
+      },
+      "learning_factor": {
+        "name": "Learning factor"
+      },
+      "frequency_error": {
+        "name": "Frequency error"
+      }
+    },
+    "number": {
+      "target_hz": {
+        "name": "Target frequency"
+      },
+      "brake_hz": {
+        "name": "Emergency-brake frequency"
+      }
+    },
+    "switch": {
+      "enabled": {
+        "name": "Frequency control"
+      }
+    },
+    "button": {
+      "reset_learning": {
+        "name": "Reset learning factor"
+      }
+    }
+  }
+}
