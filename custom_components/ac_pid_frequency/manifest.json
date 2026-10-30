@@ -4,10 +4,10 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["frontend", "http"],
-  "documentation": "https://github.com/DEIN-GITHUB-NAME/DEIN-REPO",
+  "documentation": "https://github.com/LotharWoman/AC-PID-Frequency",
   "integration_type": "service",
   "iot_class": "calculated",
-  "issue_tracker": "https://github.com/DEIN-GITHUB-NAME/DEIN-REPO/issues",
+  "issue_tracker": "https://github.com/LotharWoman/AC-PID-Frequency/issues",
   "requirements": [],
   "version": "2.0.0"
 }
