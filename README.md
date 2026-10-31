@@ -4,12 +4,26 @@ Home-Assistant-Integration (HACS), die einer Klimaanlage einen **vorgetäuschten
 
 Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home-Assistant-Entität) akzeptiert **und** die Kompressor-Frequenz als Zahlen-Entität liefert. Bei Multisplit wird nur das Master-Innengerät (das zuerst eingeschaltete) angegeben. Erst mal nur **Heizbetrieb**.
 
+## Highlights des intelligenten Lernalgorithmus
+
+* **Totzeit-Entkopplung (Patience-Timer):** Respektiert die träge Reaktionszeit der Klimaanlage (z. B. 120 s). Wenn der Kompressor bereits in Richtung Ziel beschleunigt, wird nicht vorzeitig nachgelegt.
+* **Wetterabhängiges 2D-Arbeitspunkt-Lernen:** Lernt den nötigen Grund-Offset getrennt nach Außentemperaturzonen (Frost `< 2 °C`, Übergang `2–10 °C`, Mild `> 10 °C`) und Frequenzbereichen. So zerschlägt ein milder Herbsttag nicht die Erfahrungswerte für kalte Winternächte.
+* **Überschwinger-Dämpfung:** Schießt die Frequenz über das Ziel hinaus, wird der gelernte Grund-Offset für diesen Bereich automatisch verringert.
+* **Abtau-Erkennung (Defrost):** Erkennt Abtauzyklen (über `hvac_action` oder optionalen Sensor) und pausiert Notbremse und Lernen.
+* **Thermischer Überhitzungsschutz:** Bremst die Frequenz ab, wenn die tatsächliche Raumtemperatur die Solltemperatur um mehr als z. B. 1,0 K überschreitet.
+
 ## Installation
 
-1. HACS → Benutzerdefinierte Repositories → dieses Repository als *Integration* hinzufügen → installieren → Home Assistant neu starten.
-   (Manuell: Ordner `custom_components/ac_pid_frequency` nach `/config/custom_components/` kopieren.)
+1. HACS → Benutzerdefinierte Repositories → dieses Repository als *Integration* hinzufügen → installieren → **Home Assistant neu starten**.
+   (Manuell: Ordner `custom_components/ac_pid_frequency` nach `/config/custom_components/` kopieren und neu starten.)
 2. Einstellungen → Geräte & Dienste → Integration hinzufügen → **AC PID Frequency**.
-3. Auswählen: Master-Klimaanlage, Entität der Kompressor-Frequenz, optional weitere Innengeräte (nur Anzeige).
+3. Auswählen:
+   * **Master-Klimaanlage** (Pflicht)
+   * **Kompressor-Frequenz** (Pflicht)
+   * **Außentemperatur** (optional: Sensor oder Wetter-Entität)
+   * **Echter Raumtemperatursensor** (optional: Überhitzungsschutz)
+   * **Abtau-Sensor** (optional: Binary Sensor oder Sensor)
+   * **Weitere Innengeräte** (optional: nur Anzeige)
 4. In der Integration der Klimaanlage den erzeugten Sensor **„Simulierte Raumtemperatur“** als externen Raumsensor eintragen.
 5. Karte hinzufügen (siehe unten), **Hz-Regelung** einschalten (ist nach der Einrichtung bewusst aus).
 
@@ -23,10 +37,10 @@ Alles lässt sich später ändern: Integration → *Konfigurieren* → „Entit�
 | `number` Ziel-Frequenz | Gewünschte Kompressor-Hz. Hier schreiben eigene Automationen hinein (z. B. PV-Logik) |
 | `number` Notbremse-Frequenz | Oberhalb davon wird der Sensor sofort wärmer gestellt (Standard 70 Hz) |
 | `switch` Hz-Regelung | Regler ein/aus |
-| `button` Lernfaktor zurücksetzen | Lernfaktor auf 1,0 |
-| Diagnose-Sensoren | Status, Offset zur Solltemperatur, Lernfaktor, Frequenzabweichung |
+| `button` Gelernte Werte zurücksetzen | Setzt die 2D-Lerntabelle auf Standardwerte zurück |
+| Diagnose-Sensoren | Status (inkl. `defrost` und `overheat`), Offset, gelernter Offset, Frequenzabweichung |
 
-Beispiel für eine eigene Automation (statt integrierter PV-/Eco-Logik):
+Beispiel für eine eigene Automation (z. B. PV-Logik):
 
 ```yaml
 action: number.set_value
@@ -48,29 +62,7 @@ entity: climate.mein_master_innengeraet
 # controller: sensor.…_status   (nur falls die automatische Zuordnung scheitert)
 ```
 
-Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und zeigt zusätzlich Kompressor-Ist-Hz mit Balken (Ziel = weiß, Notbremse = rot), Eingabefeld mit +/- für die Ziel-Hz, Regler-Schalter mit Status, Notbremse und weitere Innengeräte (nur Anzeige). Lüfter, Swing usw. erreichst du über die drei Punkte (Detaildialog der Klimaanlage).
-
-## Regelung (1:1 aus `klima_srk35_auto.yaml` v8.1)
-
-Fehler `err = Ziel − Ist` in Hz, Sensorwert `= Soll − Offset` (Offset > 0 → Anlage hält den Raum für kälter → mehr Hz).
-
-| Situation | Offset | Änderungsgeschwindigkeit |
-|---|---|---|
-| Ist > Notbremse | −0,5 K | max. 0,08 K/min |
-| err > +3 Hz (zu wenig Hz) | +0,6 K | max. 0,1 K/min |
-| err < −3 Hz (zu viel Hz) | −0,4 K | sofort |
-| im Totband ±3 Hz | letzter Offset, begrenzt auf ±0,3 K | max. 0,08 K/min |
-
-Der Offset wird mit dem **Lernfaktor** (0,6 … 1,2) multipliziert: −0,1 bei erkanntem Pendeln, +0,05 je Takt im Totband, sonst Rückkehr auf mindestens 0,8. Alle Zahlen sind unter *Regelparameter ändern* einstellbar; Standardwerte = deine YAML. Zusätzlich gibt es eine Sicherheitsgrenze (Standard Soll ± 1,0 K) statt fester 16–24 °C.
-
-Lernfaktor, letzter Sensorwert, Ziel-Hz, Notbremse und Schalterstellung überleben Neustarts.
-
-## Unterschiede zur YAML
-
-* PV-Überhitzung und Eco-Nachführung gibt es bewusst nicht (eigene Automation → `number` Ziel-Frequenz).
-* Der Lernfaktor wird beim Verlassen des Heizbetriebs **nicht** zurückgesetzt (dafür der Knopf); nur die Frequenz-Historie wird gelöscht.
-* Außerhalb des Heizbetriebs oder bei ausgeschaltetem Regler ist der Sensor `unavailable`, statt den letzten Wert stehen zu lassen.
-* Die Schrittbegrenzung gilt je 60 s und wird bei anderem Regeltakt umgerechnet.
+Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und zeigt zusätzlich Kompressor-Ist-Hz mit Balken (Ziel = weiß, Notbremse = rot), Eingabefeld mit +/- für die Ziel-Hz, Regler-Schalter mit Status (inkl. Abtau- und Überhitzungsanzeige), Notbremse und weitere Innengeräte (nur Anzeige).
 
 ## Entwicklung / Tests
 
@@ -78,5 +70,3 @@ Lernfaktor, letzter Sensorwert, Ziel-Hz, Notbremse und Schalterstellung überleb
 pip install pytest-homeassistant-custom-component home-assistant-frontend
 python -m pytest
 ```
-
-`tests/test_regelung.py` vergleicht den Regelkern über viele Zufallsfolgen mit einer direkten Abschrift der YAML-Logik.

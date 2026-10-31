@@ -29,7 +29,8 @@ const HZ_I18N = {
     },
     status: {
       off: "Regler aus", idle: "Wartet (kein Heizbetrieb)", raise: "Frequenz erhöhen",
-      lower: "Frequenz senken", hold: "Im Zielbereich", brake: "Notbremse aktiv",
+      lower: "Frequenz senken", hold: "Im Zielbereich (lernend)", brake: "Notbremse aktiv",
+      defrost: "Abtauen aktiv (pausiert)", overheat: "Überhitzungsschutz aktiv",
       waiting: "Daten fehlen – Wert gehalten", fault: "Fehler – Anlage nutzt eigenen Sensor",
     },
     unavailable: "Nicht verfügbar", current: "Aktuell", compressor: "Kompressor",
@@ -51,7 +52,8 @@ const HZ_I18N = {
     },
     status: {
       off: "Controller off", idle: "Waiting (not heating)", raise: "Raising frequency",
-      lower: "Lowering frequency", hold: "On target", brake: "Emergency brake",
+      lower: "Lowering frequency", hold: "On target (learning)", brake: "Emergency brake",
+      defrost: "Defrost active (paused)", overheat: "Overheat protection active",
       waiting: "Data missing – value held", fault: "Fault – AC uses its own sensor",
     },
     unavailable: "Unavailable", current: "Currently", compressor: "Compressor",

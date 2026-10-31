@@ -3,16 +3,22 @@
     "step": {
       "user": {
         "title": "Set up AC PID Frequency",
-        "description": "The controller feeds the air conditioner a simulated external room temperature sensor and thereby steers it to a target compressor frequency. Pick the master indoor unit (for multi-split: the unit switched on first) and the entity that reports the compressor frequency.",
+        "description": "The controller intelligently learns the matching temperature offset to steer the air conditioner to your target frequency. Pick the master indoor unit and compressor frequency entity.",
         "data": {
           "name": "Name",
           "climate_entity": "Air conditioner (master indoor unit)",
           "frequency_entity": "Compressor frequency (Hz)",
+          "outdoor_temp_entity": "Outdoor temperature (optional)",
+          "room_temp_entity": "Real room temperature sensor (optional)",
+          "defrost_entity": "Defrost sensor (optional)",
           "indoor_units": "Additional indoor units (display only)"
         },
         "data_description": {
           "climate_entity": "This entity is read (target temperature, mode) and operated in the card. Its integration must support an external room sensor; enter the generated sensor there afterwards.",
           "frequency_entity": "Entity that reports the current compressor frequency as a number.",
+          "outdoor_temp_entity": "Sensor or weather entity for weather-aware learning (cold, moderate, mild).",
+          "room_temp_entity": "Real room thermometer for thermal overheat protection. Fallback: current_temperature of the climate entity.",
+          "defrost_entity": "Defrost detection. During defrosting the controller pauses the emergency brake and learning. Fallback: hvac_action of the climate entity.",
           "indoor_units": "Optional. Shown small and read-only in the card."
         }
       }
@@ -35,57 +41,42 @@
         "data": {
           "climate_entity": "Air conditioner (master indoor unit)",
           "frequency_entity": "Compressor frequency (Hz)",
+          "outdoor_temp_entity": "Outdoor temperature (optional)",
+          "room_temp_entity": "Real room temperature sensor (optional)",
+          "defrost_entity": "Defrost sensor (optional)",
           "indoor_units": "Additional indoor units (display only)"
         },
         "data_description": {
           "climate_entity": "Target temperature and mode are read from this entity.",
           "frequency_entity": "Entity that reports the current compressor frequency as a number.",
+          "outdoor_temp_entity": "For weather-dependent 2D operating point learning.",
+          "room_temp_entity": "Thermal room limit against unwanted overheating.",
+          "defrost_entity": "Pauses regulation and emergency brake during defrost cycles.",
           "indoor_units": "Optional. Display only in the card."
         }
       },
       "tuning": {
-        "title": "Control parameters",
-        "description": "Defaults match the proven YAML controller. Target frequency and emergency-brake frequency are set directly via their entities or the card.",
+        "title": "Control and learning parameters",
+        "description": "Adjust dead times, safety limits and overheat protection.",
         "data": {
           "interval_s": "Control interval",
-          "fault_timeout_min": "Fault timeout",
+          "reaction_time_s": "AC reaction time (dead-time filter)",
           "deadband_hz": "Dead band",
-          "offset_raise": "Offset when frequency too low",
-          "offset_lower": "Offset when frequency too high",
+          "max_offset": "Max offset to target temperature",
+          "max_room_overheat": "Max room overheating",
           "offset_brake": "Offset on emergency brake",
-          "hold_limit": "Max. held offset inside dead band",
-          "step_raise": "Max. change per minute (frequency too low)",
-          "step_normal": "Max. change per minute (otherwise)",
-          "max_offset": "Safety limit around target temperature",
-          "hunting_hz": "Hunting threshold",
-          "factor_min": "Learning factor: minimum",
-          "factor_max": "Learning factor: maximum",
-          "factor_floor": "Learning factor: recovery value outside dead band",
-          "factor_down": "Learning factor: decrease when hunting",
-          "factor_up": "Learning factor: increase inside dead band"
+          "fault_timeout_min": "Fault timeout"
         },
         "data_description": {
-          "interval_s": "Seconds between two control steps. 60 s equals the YAML original; the per-minute step sizes are scaled automatically.",
-          "fault_timeout_min": "If target temperature or Hz value is missing, the last sensor value is held for this long. Afterwards the sensor becomes unavailable and the AC uses its own indoor sensor again.",
-          "deadband_hz": "Deviation from the target within which the offset is held.",
-          "offset_raise": "The sensor is set this much colder than the setpoint when the frequency is too low (AC heats harder).",
-          "offset_lower": "The sensor is set this much warmer than the setpoint when the frequency is too high. Acts immediately.",
-          "offset_brake": "The sensor is set this much warmer than the setpoint when the emergency-brake frequency is exceeded.",
-          "hold_limit": "Inside the dead band the last offset is held, but at most up to this value.",
-          "step_raise": "Largest change of the sensor value per minute when the frequency is too low.",
-          "step_normal": "Largest change of the sensor value per minute in all other cases.",
-          "max_offset": "The sensor value always stays within setpoint ± this value.",
-          "hunting_hz": "Frequency jump per step above which a direction change counts as hunting.",
-          "factor_min": "Lower limit of the self-learning factor that scales the offset.",
-          "factor_max": "Upper limit of the learning factor.",
-          "factor_floor": "Outside the dead band the factor returns to at least this value.",
-          "factor_down": "The factor drops by this much when hunting is detected.",
-          "factor_up": "The factor rises by this much per step inside the dead band."
+          "interval_s": "Seconds between two controller calculation steps.",
+          "reaction_time_s": "Minimum observation time (e.g. 120 s) after a step to give the sluggish AC time to react.",
+          "deadband_hz": "Dead band around target (Hz) in which the state is held and learned.",
+          "max_offset": "Maximum offset in Kelvin relative to target temperature.",
+          "max_room_overheat": "If the real room exceeds target by more than this value, thermal throttling activates.",
+          "offset_brake": "Offset added when frequency exceeds emergency brake.",
+          "fault_timeout_min": "If input data is missing longer than this time, the sensor becomes unavailable."
         }
       }
-    },
-    "error": {
-      "invalid_factor_range": "Must satisfy: minimum ≤ recovery value ≤ maximum."
     }
   },
   "entity": {
@@ -100,8 +91,10 @@
           "idle": "Waiting (not heating)",
           "raise": "Raising frequency",
           "lower": "Lowering frequency",
-          "hold": "On target",
+          "hold": "On target (learning)",
           "brake": "Emergency brake",
+          "defrost": "Defrost active (paused)",
+          "overheat": "Overheat protection active",
           "waiting": "Data missing (value held)",
           "fault": "Fault (sensor unavailable)"
         }
@@ -110,7 +103,7 @@
         "name": "Offset to setpoint"
       },
       "learning_factor": {
-        "name": "Learning factor"
+        "name": "Learned offset"
       },
       "frequency_error": {
         "name": "Frequency error"
@@ -131,7 +124,7 @@
     },
     "button": {
       "reset_learning": {
-        "name": "Reset learning factor"
+        "name": "Reset learned values"
       }
     }
   }

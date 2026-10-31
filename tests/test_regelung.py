@@ -1,166 +1,161 @@
-"""Tests für den reinen Regelkern (ohne Home Assistant)."""
+"""Tests für den intelligenten Regel- und Lernkern (ohne Home Assistant)."""
 
 from __future__ import annotations
 
 import importlib.util
-import random
 from pathlib import Path
+import sys
 
 _PATH = Path(__file__).parent.parent / "custom_components" / "ac_pid_frequency" / "regelung.py"
 _spec = importlib.util.spec_from_file_location("regelung", _PATH)
 regelung = importlib.util.module_from_spec(_spec)
-import sys
-
-sys.modules["regelung"] = regelung  # dataclasses braucht das Modul in sys.modules
+sys.modules["regelung"] = regelung
 _spec.loader.exec_module(regelung)
 
-Params, State, step = regelung.Params, regelung.State, regelung.step
+Params = regelung.Params
+State = regelung.State
+step = regelung.step
+OUTDOOR_BIN_COLD = regelung.OUTDOOR_BIN_COLD
+OUTDOOR_BIN_NORMAL = regelung.OUTDOOR_BIN_NORMAL
+OUTDOOR_BIN_WARM = regelung.OUTDOOR_BIN_WARM
+FREQ_BIN_MID_LOW = regelung.FREQ_BIN_MID_LOW
+MODE_HOLD = regelung.MODE_HOLD
+MODE_RAISE = regelung.MODE_RAISE
+MODE_LOWER = regelung.MODE_LOWER
+MODE_BRAKE = regelung.MODE_BRAKE
+MODE_DEFROST = regelung.MODE_DEFROST
+MODE_OVERHEAT = regelung.MODE_OVERHEAT
 
 
-# --------------------------------------------------------------------------------------
-# Referenz: direkte Abschrift der YAML-Logik (klima_srk35_auto.yaml v8.1), unabhängig
-# vom Produktivcode geschrieben. v_alt ist hier der letzte Ausgabewert.
-# --------------------------------------------------------------------------------------
-def yaml_reference(soll, hz, hz_v1, hz_v2, factor, v_alt, ziel_hz, notbremse):
-    ziel = min(notbremse, ziel_hz)
-    err = ziel - hz
-    trend_1m = hz - hz_v1
-    d_alt = soll - v_alt
-    is_hunting = (trend_1m * (hz_v1 - hz_v2)) < 0 and abs(trend_1m) > 2.0
-    if is_hunting:
-        new_factor = max(0.6, factor - 0.1)
-    elif abs(err) <= 3.0:
-        new_factor = min(1.2, factor + 0.05)
-    else:
-        new_factor = max(0.8, factor)
-    if hz > notbremse:
-        d_raw = -0.5
-    elif err > 3.0:
-        d_raw = 0.6
-    elif err < -3.0:
-        d_raw = -0.4
-    elif abs(err) <= 3.0:
-        d_raw = min(0.3, max(-0.3, d_alt))
-    else:
-        d_raw = 0.0
-    d_calc = round(d_raw * factor, 2)
-    v_target = max(16.0, min(24.0, regelung.round1(soll - d_calc)))
-    v_delta_max = 0.1 if err > 3.0 else 0.08
-    diff = v_target - v_alt
-    if err < -3.0:
-        v_cmd = v_target
-    elif diff > v_delta_max:
-        v_cmd = round(v_alt + v_delta_max, 2)
-    elif diff < -v_delta_max:
-        v_cmd = round(v_alt - v_delta_max, 2)
-    else:
-        v_cmd = v_target
-    return v_cmd, round(new_factor, 2)
-
-
-def test_matches_yaml_reference_on_random_sequences():
-    """Über viele Zufallsfolgen exakt das gleiche Ergebnis wie die YAML-Logik."""
-    rnd = random.Random(1234)
-    # Sicherheitsgrenze so weit aufmachen, dass sie die YAML-Referenz nicht beeinflusst
-    params = Params(max_offset=100.0)
-    for _ in range(200):
-        soll = rnd.choice([19.0, 20.0, 20.5, 21.0, 22.0])
-        target = rnd.choice([22, 30, 35, 48])
-        brake = rnd.choice([60, 70, 80])
-        s = State()
-        hz_v1 = hz_v2 = None
-        v_alt = soll
-        factor = 1.0
-        hz = rnd.uniform(0, 60)
-        for _ in range(80):
-            hz = max(0.0, hz + rnd.uniform(-9, 9))
-            ref_v1 = hz_v1 if hz_v1 is not None else hz
-            ref_v2 = hz_v2 if hz_v2 is not None else ref_v1
-            exp_v, exp_f = yaml_reference(soll, hz, ref_v1, ref_v2, factor, v_alt, target, brake)
-            res = step(params, s, soll, hz, target, brake)
-            assert abs(res.output - exp_v) < 1e-9, (soll, hz, target, brake)
-            assert abs(res.factor - exp_f) < 1e-9
-            v_alt, factor = exp_v, exp_f
-            hz_v2, hz_v1 = ref_v1, hz
-
-
-def test_hz_too_low_pushes_sensor_down_slowly():
-    """Heizen: zu wenig Hz -> Sensor sinkt unter Soll, max. 0,1 K je Minute."""
+def test_initial_step_uses_learned_base_offset():
+    """Beim Erststart wird der passende gelernte Erfahrungswert direkt angesetzt."""
     s = State()
     p = Params()
-    values = [step(p, s, 21.0, 10.0, 40, 70).output for _ in range(10)]
-    assert values[0] == 20.9
-    assert all(a - b <= 0.1 + 1e-9 for a, b in zip(values, values[1:]))
-    # läuft bis Soll - 0.6*Faktor (Faktor bleibt außerhalb des Totbands bei 1.0)
-    assert min(values) >= 20.4 - 1e-9
-    assert values[-1] < values[0]
+    # Ziel 30 Hz bei normaler Außentemperatur (8 °C) -> normal/mid_low (default 0.35 K)
+    res = step(p, s, setpoint=21.0, hz=15.0, target_hz=30.0, brake_hz=70.0, outdoor_temp=8.0)
+    assert res.outdoor_bin == OUTDOOR_BIN_NORMAL
+    assert res.freq_bin == FREQ_BIN_MID_LOW
+    assert res.learned_offset == 0.35
+    assert res.published == 20.7  # 21.0 - 0.35 = 20.65 -> 20.7
 
 
-def test_hz_too_high_drops_immediately():
-    """Zu viel Hz -> Sensor springt sofort auf Soll + 0,4."""
-    s = State(output=20.4)
-    res = step(Params(), s, 21.0, 50.0, 30, 70)
-    assert res.mode == "lower"
-    assert res.output == 21.4
+def test_reaction_time_observation_window():
+    """Respektiert die Totzeit der Anlage: macht nicht jede Minute ungeduldig einen Schritt."""
+    s = State()
+    p = Params(interval_s=60.0, reaction_time_s=120.0)
+    # Takt 1: Start bei 20.7
+    res1 = step(p, s, 21.0, 15.0, 30.0, 70.0, outdoor_temp=8.0)
+    val1 = res1.published
+
+    # Takt 2 (nach 60s): Frequenz stagniert bei 15 Hz, aber 120s sind noch nicht um
+    res2 = step(p, s, 21.0, 15.0, 30.0, 70.0, outdoor_temp=8.0)
+    assert res2.published == val1  # Keine vorzeitige Änderung!
+
+    # Takt 3 (nach 120s): 120s sind erreicht und Frequenz stagniert -> behutsamer 0,1-K-Schritt
+    res3 = step(p, s, 21.0, 15.0, 30.0, 70.0, outdoor_temp=8.0)
+    assert round(val1 - res3.published, 1) == 0.1
 
 
-def test_deadband_holds_last_offset_limited():
-    s = State(output=20.8)  # Offset 0.2 liegt im Haltebereich
-    res = step(Params(), s, 21.0, 30.0, 30, 70)
-    assert res.mode == "hold"
-    assert res.output == 20.8
-    # Großer alter Offset wird auf ±hold_limit begrenzt und langsam abgebaut
-    s = State(output=20.4)
-    res = step(Params(), s, 21.0, 30.0, 30, 70)
-    assert res.mode == "hold"
-    assert res.output == 20.48  # 0.08 K Schritt Richtung Soll-0.3
+def test_patience_when_compressor_actively_accelerating():
+    """Wenn der Kompressor bereits nach oben beschleunigt (Trend >= 1.5 Hz), stillhalten!"""
+    s = State()
+    p = Params(interval_s=60.0, reaction_time_s=120.0)
+    # Takt 1
+    step(p, s, 21.0, 15.0, 30.0, 70.0, outdoor_temp=8.0)
+    # Takt 2 (nach 60s)
+    step(p, s, 21.0, 15.0, 30.0, 70.0, outdoor_temp=8.0)
+    # Takt 3 (nach 120s): Kompressor beschleunigt kräftig (15 -> 20 Hz, Trend +5)
+    res = step(p, s, 21.0, 20.0, 30.0, 70.0, outdoor_temp=8.0)
+    # Trotz abgelaufener 120s darf er keinen neuen Schritt nachlegen!
+    assert res.published == s.output
 
 
-def test_emergency_brake_is_configurable_and_forces_negative_offset():
-    s = State(output=21.0)
-    res = step(Params(), s, 21.0, 72.0, 80, 70)  # Ziel 80 wird von Notbremse 70 gedeckelt
-    assert res.mode == "brake"
-    assert res.offset < 0
-    # mit höherer Notbremse greift sie nicht
-    s = State(output=21.0)
-    res = step(Params(), s, 21.0, 72.0, 80, 85)
-    assert res.mode != "brake"
-
-
-def test_learning_factor_drops_when_hunting_and_rises_in_deadband():
-    p = Params()
-    s = State(factor=1.0)
-    step(p, s, 21.0, 30.0, 30, 70)  # Historie füllen
-    step(p, s, 21.0, 40.0, 30, 70)  # +10
-    res = step(p, s, 21.0, 30.0, 30, 70)  # -10 -> Pendeln
-    assert res.hunting
-    assert res.factor == 0.95  # 1.0 -> 1.05 (Totband) -> 1.05 (außerhalb) -> 0.95 (Pendeln)
-    s = State(factor=1.0)
-    res = step(p, s, 21.0, 30.0, 30, 70)
-    assert res.factor == 1.05
-    for _ in range(10):
-        res = step(p, s, 21.0, 30.0, 30, 70)
-    assert res.factor == 1.2  # Obergrenze
-
-
-def test_safety_clamp_relative_to_setpoint():
-    p = Params(max_offset=0.5)
-    s = State(output=30.0)  # unsinniger Altwert
-    res = step(p, s, 21.0, 30.0, 30, 70)
-    assert 20.5 <= res.output <= 21.5
-
-
-def test_interval_scales_rate_limit():
-    s30, s60 = State(), State()
-    a = step(Params(interval_s=30), s30, 21.0, 10.0, 40, 70).output
-    b = step(Params(interval_s=60), s60, 21.0, 10.0, 40, 70).output
-    assert round(21.0 - a, 2) == 0.05
-    assert round(21.0 - b, 2) == 0.1
-
-
-def test_published_value_has_one_decimal():
+def test_deadband_learning_updates_table():
+    """Im Totband lernt der Regler nach Stabilisierung den exakten Arbeitspunkt."""
     s = State()
     p = Params()
-    for _ in range(30):
-        res = step(p, s, 21.0, 10.0, 40, 70)
-        assert res.published == round(res.published, 1)
+    # Einrichten mit Ziel 30 Hz bei 20.6 K (Offset 0.4 K)
+    s.output = 20.6
+    # Takt 1 im Totband (29 Hz)
+    step(p, s, 21.0, 29.0, 30.0, 70.0, outdoor_temp=8.0)
+    assert s.stable_cycles == 1
+    initial_learned = s.current_learned_offset
+
+    # Takt 2 im Totband (30 Hz) -> Lernen greift!
+    res = step(p, s, 21.0, 30.0, 30.0, 70.0, outdoor_temp=8.0)
+    assert res.mode == MODE_HOLD
+    assert s.stable_cycles == 2
+    # Der gelernte Offset nähert sich 0.4 K an
+    assert s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] > initial_learned
+
+
+def test_overshoot_penalizes_learned_offset():
+    """Bei Überschwingern über das Ziel wird der gelernte Wert automatisch gedämpft."""
+    s = State()
+    p = Params(deadband_hz=3.0, overshoot_penalty=0.05)
+    s.output = 20.5
+    learned_before = s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW]
+
+    # Frequenz schießt auf 36 Hz (Ziel 30, Totband 3, Überschwinger > 35 Hz)
+    res = step(p, s, 21.0, 36.0, 30.0, 70.0, outdoor_temp=8.0)
+    assert res.mode == MODE_LOWER
+    assert s.overshoot_detected is True
+    assert s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] == round(learned_before - 0.05, 2)
+
+
+def test_defrost_freezes_state_and_avoids_brake():
+    """Während des Abtauens pausiert der Regler und löst keine Notbremse aus."""
+    s = State()
+    s.output = 20.7
+    p = Params()
+    # Kompressor dreht auf 75 Hz (über Notbremse 70 Hz), aber Defrost ist aktiv!
+    res = step(p, s, 21.0, 75.0, 30.0, 70.0, defrost=True)
+    assert res.mode == MODE_DEFROST
+    assert res.published == 20.7  # Unverändert gehalten!
+    assert s.overshoot_detected is False
+
+
+def test_room_overheat_protection():
+    """Wird der echte Raum zu warm, greift die thermische Notbremse."""
+    s = State()
+    p = Params(max_room_overheat=1.0)
+    s.output = 20.6
+    # Soll 21.0, Raumtemp 22.2 °C (mehr als Soll + 1.0 K)
+    res = step(p, s, setpoint=21.0, hz=30.0, target_hz=30.0, brake_hz=70.0, room_temp=22.2)
+    assert res.mode == MODE_OVERHEAT
+    # Sensor wird auf 21.4 (Soll + 0.4) gestellt, um die Anlage abzutouren
+    assert res.published >= 21.0
+
+
+def test_emergency_brake_on_high_hz():
+    """Notbremse zieht sofort bei Überschreiten von brake_hz (wenn kein Defrost)."""
+    s = State()
+    s.output = 20.6
+    p = Params(offset_brake=0.5)
+    res = step(p, s, 21.0, 75.0, 30.0, 70.0)
+    assert res.mode == MODE_BRAKE
+    assert res.published == 21.5  # 21.0 + 0.5
+
+
+def test_outdoor_bins_separate_learning():
+    """Änderungen in der Frostzone (cold) verändern nicht die Werte der Übergangszone (normal)."""
+    s = State()
+    p = Params()
+    # In Cold-Zone (-2 °C) lernen
+    s.output = 20.3  # Offset 0.7 K
+    step(p, s, 21.0, 30.0, 30.0, 70.0, outdoor_temp=-2.0)
+    step(p, s, 21.0, 30.0, 30.0, 70.0, outdoor_temp=-2.0)
+
+    # Cold hat gelernt:
+    assert s.learned_table[OUTDOOR_BIN_COLD][FREQ_BIN_MID_LOW] != regelung.DEFAULT_LEARNED_OFFSETS[OUTDOOR_BIN_COLD][FREQ_BIN_MID_LOW]
+    # Normal und Warm sind unberührt:
+    assert s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] == regelung.DEFAULT_LEARNED_OFFSETS[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW]
+    assert s.learned_table[OUTDOOR_BIN_WARM][FREQ_BIN_MID_LOW] == regelung.DEFAULT_LEARNED_OFFSETS[OUTDOOR_BIN_WARM][FREQ_BIN_MID_LOW]
+
+
+def test_reset_learning():
+    """Reset setzt alle gelernten Tabellenwerte auf Standard zurück."""
+    s = State()
+    s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] = 0.99
+    s.reset_learning()
+    assert s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] == 0.35

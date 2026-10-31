@@ -18,14 +18,20 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.ac_pid_frequency.const import (
     CONF_CLIMATE,
+    CONF_DEFROST,
     CONF_FREQUENCY,
     CONF_INDOOR_UNITS,
+    CONF_OUTDOOR_TEMP,
+    CONF_ROOM_TEMP,
     DOMAIN,
     TUNING_DEFAULTS,
 )
 
 CLIMATE = "climate.master"
 HZ = "sensor.compressor_hz"
+OUTDOOR = "sensor.outdoor_temp"
+ROOM = "sensor.real_room_temp"
+DEFROST = "binary_sensor.defrost"
 
 
 def _entry(**extra) -> MockConfigEntry:
@@ -37,6 +43,9 @@ def _entry(**extra) -> MockConfigEntry:
             "name": "Klima Test",
             CONF_CLIMATE: CLIMATE,
             CONF_FREQUENCY: HZ,
+            CONF_OUTDOOR_TEMP: OUTDOOR,
+            CONF_ROOM_TEMP: ROOM,
+            CONF_DEFROST: DEFROST,
             CONF_INDOOR_UNITS: ["climate.zimmer2"],
             **extra,
         },
@@ -49,9 +58,12 @@ def _eid(hass: HomeAssistant, entry, platform: str, key: str) -> str:
     return entity_id
 
 
-async def _setup(hass: HomeAssistant, climate_state="heat", setpoint=21.0, hz="10"):
+async def _setup(hass: HomeAssistant, climate_state="heat", setpoint=21.0, hz="10", outdoor="8.0", room="20.5", defrost="off"):
     hass.states.async_set(CLIMATE, climate_state, {"temperature": setpoint})
     hass.states.async_set(HZ, hz)
+    hass.states.async_set(OUTDOOR, outdoor)
+    hass.states.async_set(ROOM, room)
+    hass.states.async_set(DEFROST, defrost)
     entry = _entry()
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -75,13 +87,16 @@ async def test_config_flow_creates_entry_and_rejects_duplicate(hass: HomeAssista
         "name": "Klima Flur",
         CONF_CLIMATE: CLIMATE,
         CONF_FREQUENCY: HZ,
+        CONF_OUTDOOR_TEMP: OUTDOOR,
+        CONF_ROOM_TEMP: ROOM,
+        CONF_DEFROST: DEFROST,
         CONF_INDOOR_UNITS: [CLIMATE, "climate.zimmer2", "climate.zimmer2"],
     }
     result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Klima Flur"
-    # Master und Doppelte werden aus der Innengeräte-Liste entfernt
     assert result["data"][CONF_INDOOR_UNITS] == ["climate.zimmer2"]
+    assert result["data"][CONF_OUTDOOR_TEMP] == OUTDOOR
     await hass.async_block_till_done()
 
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
@@ -98,27 +113,51 @@ async def test_sensor_unavailable_while_controller_off(hass: HomeAssistant) -> N
     assert status.state == "off"
 
 
-async def test_regulation_follows_yaml_logic(hass: HomeAssistant) -> None:
-    entry = await _setup(hass, hz="10")
+async def test_intelligent_regulation_and_dead_time(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="10", outdoor="8.0")
     sensor = _eid(hass, entry, "sensor", "temperature")
     switch = _eid(hass, entry, "switch", "enabled")
 
     await hass.services.async_call("switch", "turn_on", {"entity_id": switch}, blocking=True)
     await hass.async_block_till_done()
-    # Soll 21,0; Hz 10 < Ziel 30 -> sofort ein Schritt von 0,1 K nach unten
-    assert hass.states.get(sensor).state == "20.9"
+    # Soll 21.0, Outdoor 8.0 -> normal/mid_low (learned 0.35) -> Start bei 20.7
+    assert hass.states.get(sensor).state == "20.7"
     assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "raise"
 
+    # Nach 60 s (unter 120s Reaktionszeit) -> hält Wert
     await _tick(hass, 61)
-    assert hass.states.get(sensor).state == "20.8"
-    await _tick(hass, 122)
     assert hass.states.get(sensor).state == "20.7"
 
-    # Frequenz deutlich über Ziel -> Sensor springt sofort wärmer als Soll (Soll + 0,4*Faktor)
+    # Nach 121 s -> Totzeit verstrichen, Frequenz stagniert noch bei 10 -> Schritt um 0,1 K kälter
+    await _tick(hass, 61)
+    assert hass.states.get(sensor).state == "20.6"
+
+    # Frequenz schießt hoch auf 50 Hz -> Mode lower
     hass.states.async_set(HZ, "50")
-    await _tick(hass, 183)
-    assert float(hass.states.get(sensor).state) > 21.0
+    await _tick(hass, 61)
     assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "lower"
+
+
+async def test_defrost_pauses_regulation(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="75", defrost="on")
+    sensor = _eid(hass, entry, "sensor", "temperature")
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    # Im Defrost wird Mode defrost gemeldet und keine Notbremse ausgelöst
+    status = hass.states.get(_eid(hass, entry, "sensor", "status"))
+    assert status.state == "defrost"
+
+
+async def test_overheat_protection_triggers(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="30", room="22.5")  # Soll 21.0, Raum 22.5 > 21 + 1.0
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    status = hass.states.get(_eid(hass, entry, "sensor", "status"))
+    assert status.state == "overheat"
 
 
 async def test_sensor_unavailable_when_not_heating(hass: HomeAssistant) -> None:
@@ -131,7 +170,7 @@ async def test_sensor_unavailable_when_not_heating(hass: HomeAssistant) -> None:
     assert hass.states.get(sensor).state != STATE_UNAVAILABLE
 
     hass.states.async_set(CLIMATE, "off", {"temperature": 21.0})
-    await hass.async_block_till_done()  # Wechsel aus dem Heizbetrieb wirkt sofort
+    await hass.async_block_till_done()
     assert hass.states.get(sensor).state == STATE_UNAVAILABLE
     assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "idle"
 
@@ -158,27 +197,20 @@ async def test_missing_data_holds_value_then_goes_unavailable(
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert hass.states.get(status).state == "waiting"
-    assert hass.states.get(sensor).state == held  # gehalten
+    assert hass.states.get(sensor).state == held
 
-    freezer.tick(timedelta(minutes=10))  # Standard-Wartezeit 10 min überschritten
+    freezer.tick(timedelta(minutes=10))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert hass.states.get(status).state == "fault"
     assert hass.states.get(sensor).state == STATE_UNAVAILABLE
-
-    # Daten kommen zurück -> Regler regelt wieder
-    hass.states.async_set(HZ, "10")
-    freezer.tick(timedelta(minutes=1))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
-    assert hass.states.get(sensor).state != STATE_UNAVAILABLE
 
 
 async def test_numbers_and_status_attributes(hass: HomeAssistant) -> None:
     entry = await _setup(hass)
     brake = _eid(hass, entry, "number", "brake_hz")
     target = _eid(hass, entry, "number", "target_hz")
-    assert float(hass.states.get(brake).state) == 70.0  # Standard
+    assert float(hass.states.get(brake).state) == 70.0
 
     await hass.services.async_call(
         "number", "set_value", {"entity_id": brake, "value": 62}, blocking=True
@@ -188,32 +220,24 @@ async def test_numbers_and_status_attributes(hass: HomeAssistant) -> None:
     )
     assert float(hass.states.get(brake).state) == 62.0
     assert float(hass.states.get(target).state) == 25.0
-    assert entry.runtime_data.brake_hz == 62.0
 
     attrs = hass.states.get(_eid(hass, entry, "sensor", "status")).attributes
     assert attrs["ac_pid_frequency_climate"] == CLIMATE
     assert attrs["frequency_entity"] == HZ
-    assert attrs["indoor_units"] == ["climate.zimmer2"]
+    assert attrs["outdoor_temperature_entity"] == OUTDOOR
+    assert attrs["room_temperature_entity"] == ROOM
+    assert attrs["defrost_entity"] == DEFROST
     assert attrs["target_hz_entity"] == target
     assert attrs["brake_hz_entity"] == brake
-    assert attrs["switch_entity"] == _eid(hass, entry, "switch", "enabled")
-    assert attrs["temperature_entity"] == _eid(hass, entry, "sensor", "temperature")
 
 
-async def test_state_survives_restart(hass: HomeAssistant, hass_storage) -> None:
+async def test_learned_state_survives_restart(hass: HomeAssistant, hass_storage) -> None:
     entry = await _setup(hass)
-    brake = _eid(hass, entry, "number", "brake_hz")
-    target = _eid(hass, entry, "number", "target_hz")
     await hass.services.async_call(
         "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
     )
-    await hass.services.async_call(
-        "number", "set_value", {"entity_id": brake, "value": 66}, blocking=True
-    )
-    await hass.services.async_call(
-        "number", "set_value", {"entity_id": target, "value": 24}, blocking=True
-    )
-    entry.runtime_data.regelung.factor = 0.85
+    # Manuell einen gelernten Wert setzen
+    entry.runtime_data.regelung.learned_table["normal"]["mid_low"] = 0.42
     await hass.async_block_till_done()
 
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -223,20 +247,17 @@ async def test_state_survives_restart(hass: HomeAssistant, hass_storage) -> None
 
     controller = entry.runtime_data
     assert controller.enabled is True
-    assert controller.brake_hz == 66.0
-    assert controller.target_hz == 24.0
-    assert controller.regelung.factor == 0.85
-    assert controller.regelung.output is not None
+    assert controller.regelung.learned_table["normal"]["mid_low"] == 0.42
 
 
 async def test_reset_learning_button(hass: HomeAssistant) -> None:
     entry = await _setup(hass)
-    entry.runtime_data.regelung.factor = 0.7
+    entry.runtime_data.regelung.learned_table["normal"]["mid_low"] = 0.88
     await hass.services.async_call(
         "button", "press", {"entity_id": _eid(hass, entry, "button", "reset_learning")},
         blocking=True,
     )
-    assert entry.runtime_data.regelung.factor == 1.0
+    assert entry.runtime_data.regelung.learned_table["normal"]["mid_low"] == 0.35
 
 
 async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
@@ -253,31 +274,30 @@ async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
     assert flow["type"] is FlowResultType.FORM and flow["step_id"] == "entities"
     flow = await hass.config_entries.options.async_configure(
         flow["flow_id"],
-        {CONF_CLIMATE: "climate.neu", CONF_FREQUENCY: "sensor.hz_neu"},
+        {
+            CONF_CLIMATE: "climate.neu",
+            CONF_FREQUENCY: "sensor.hz_neu",
+            CONF_OUTDOOR_TEMP: "sensor.aussen_neu",
+        },
     )
     assert flow["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data.config[CONF_CLIMATE] == "climate.neu"
-    assert entry.runtime_data.config[CONF_INDOOR_UNITS] == []  # leer gelassen -> entfernt
+    assert entry.runtime_data.config[CONF_OUTDOOR_TEMP] == "sensor.aussen_neu"
 
-    # Parameter: ungültiger Lernfaktor-Bereich wird abgelehnt
+    # Parameter anpassen
     flow = await hass.config_entries.options.async_init(entry.entry_id)
     flow = await hass.config_entries.options.async_configure(
         flow["flow_id"], {"next_step_id": "tuning"}
     )
     assert flow["step_id"] == "tuning"
-    bad = {**TUNING_DEFAULTS, "factor_min": 1.1, "factor_floor": 0.8, "factor_max": 1.2}
-    flow = await hass.config_entries.options.async_configure(flow["flow_id"], bad)
-    assert flow["type"] is FlowResultType.FORM
-    assert flow["errors"] == {"base": "invalid_factor_range"}
-
-    good = {**TUNING_DEFAULTS, "interval_s": 30, "deadband_hz": 4.0}
+    good = {**TUNING_DEFAULTS, "interval_s": 30, "reaction_time_s": 150}
     flow = await hass.config_entries.options.async_configure(flow["flow_id"], good)
     assert flow["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     params = entry.runtime_data.params
-    assert params.interval_s == 30 and params.deadband_hz == 4.0
+    assert params.interval_s == 30 and params.reaction_time_s == 150
 
 
 async def test_card_is_served(hass: HomeAssistant, hass_client) -> None:

@@ -15,7 +15,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_CLIMATE, CONF_FREQUENCY, CONF_INDOOR_UNITS, DOMAIN, STATUSES
+from .const import (
+    CONF_CLIMATE,
+    CONF_DEFROST,
+    CONF_FREQUENCY,
+    CONF_INDOOR_UNITS,
+    CONF_OUTDOOR_TEMP,
+    CONF_ROOM_TEMP,
+    DOMAIN,
+    STATUSES,
+)
 from .controller import AcPidFrequencyController
 from .entity import AcPidFrequencyEntity
 
@@ -86,7 +95,13 @@ class StatusSensor(AcPidFrequencyEntity, SensorEntity):
             # Schlüssel, über den die Karte "ihren" Regler zur Climate-Entität findet
             "ac_pid_frequency_climate": cfg[CONF_CLIMATE],
             "frequency_entity": cfg[CONF_FREQUENCY],
+            "outdoor_temperature_entity": cfg.get(CONF_OUTDOOR_TEMP),
+            "room_temperature_entity": cfg.get(CONF_ROOM_TEMP),
+            "defrost_entity": cfg.get(CONF_DEFROST),
             "indoor_units": list(cfg.get(CONF_INDOOR_UNITS) or []),
+            "active_outdoor_bin": self.controller.regelung.current_outdoor_bin,
+            "active_freq_bin": self.controller.regelung.current_freq_bin,
+            "learned_offset": self.controller.regelung.current_learned_offset,
             "temperature_entity": lookup("sensor", "temperature"),
             "offset_entity": lookup("sensor", "offset"),
             "factor_entity": lookup("sensor", "learning_factor"),
@@ -114,8 +129,9 @@ class OffsetSensor(AcPidFrequencyEntity, SensorEntity):
 
 
 class FactorSensor(AcPidFrequencyEntity, SensorEntity):
-    """Aktueller Lernfaktor."""
+    """Aktueller Erfahrungswert / gelernter Offset für den aktiven Arbeitspunkt."""
 
+    _attr_native_unit_of_measurement = "K"
     _attr_suggested_display_precision = 2
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -125,7 +141,7 @@ class FactorSensor(AcPidFrequencyEntity, SensorEntity):
 
     @property
     def native_value(self) -> float:
-        return self.controller.regelung.factor
+        return self.controller.regelung.current_learned_offset
 
 
 class ErrorSensor(AcPidFrequencyEntity, SensorEntity):

@@ -1,9 +1,10 @@
 """Controller: verbindet den Regelkern mit Home Assistant.
 
 * liest Soll-Temperatur (Master-Climate) und Kompressor-Hz,
+* liest optional Außentemperatur, echten Raumtemperatursensor und Abtaustatus,
 * rechnet im eingestellten Takt einen Regelschritt,
 * stellt das Ergebnis als Sensorwert bereit (Entitäten holen es sich vom Controller),
-* speichert Lernfaktor, Sensorwert und Einstellungen über Neustarts hinweg.
+* speichert 2D-Lerntabelle, Sensorwert und Einstellungen über Neustarts hinweg.
 
 Fehlerverhalten: Fehlen Eingangsdaten, wird der letzte Wert zunächst gehalten
 (Status ``waiting``). Dauert das länger als ``fault_timeout_min``, wird der Sensor
@@ -36,22 +37,16 @@ from .const import (
     BRAKE_HZ_MIN,
     CONF_CLIMATE,
     CONF_DEADBAND,
-    CONF_FACTOR_DOWN,
-    CONF_FACTOR_FLOOR,
-    CONF_FACTOR_MAX,
-    CONF_FACTOR_MIN,
-    CONF_FACTOR_UP,
+    CONF_DEFROST,
     CONF_FAULT_TIMEOUT,
     CONF_FREQUENCY,
-    CONF_HOLD_LIMIT,
-    CONF_HUNTING,
     CONF_INTERVAL,
     CONF_MAX_OFFSET,
+    CONF_MAX_ROOM_OVERHEAT,
     CONF_OFFSET_BRAKE,
-    CONF_OFFSET_LOWER,
-    CONF_OFFSET_RAISE,
-    CONF_STEP_NORMAL,
-    CONF_STEP_RAISE,
+    CONF_OUTDOOR_TEMP,
+    CONF_REACTION_TIME,
+    CONF_ROOM_TEMP,
     DEFAULT_BRAKE_HZ,
     DEFAULT_TARGET_HZ,
     DOMAIN,
@@ -103,7 +98,7 @@ class AcPidFrequencyController:
             model="AC PID Frequency",
         )
 
-        # Regelkern-Zustand
+        # Regelkern-Zustand (inkl. gelernter Arbeitspunkt-Tabelle)
         self.regelung = State()
 
         # Vom Nutzer einstellbar (per Entität), werden gespeichert
@@ -129,20 +124,11 @@ class AcPidFrequencyController:
         c = self.config
         return Params(
             interval_s=float(c[CONF_INTERVAL]),
+            reaction_time_s=float(c[CONF_REACTION_TIME]),
             deadband_hz=float(c[CONF_DEADBAND]),
-            offset_raise=float(c[CONF_OFFSET_RAISE]),
-            offset_lower=float(c[CONF_OFFSET_LOWER]),
             offset_brake=float(c[CONF_OFFSET_BRAKE]),
-            hold_limit=float(c[CONF_HOLD_LIMIT]),
-            step_raise=float(c[CONF_STEP_RAISE]),
-            step_normal=float(c[CONF_STEP_NORMAL]),
             max_offset=float(c[CONF_MAX_OFFSET]),
-            hunting_hz=float(c[CONF_HUNTING]),
-            factor_min=float(c[CONF_FACTOR_MIN]),
-            factor_max=float(c[CONF_FACTOR_MAX]),
-            factor_floor=float(c[CONF_FACTOR_FLOOR]),
-            factor_down=float(c[CONF_FACTOR_DOWN]),
-            factor_up=float(c[CONF_FACTOR_UP]),
+            max_room_overheat=float(c[CONF_MAX_ROOM_OVERHEAT]),
         )
 
     # ------------------------------------------------------------------ Lebenszyklus
@@ -152,15 +138,16 @@ class AcPidFrequencyController:
         self.enabled = bool(data.get("enabled", False))
         target = _to_float(data.get("target_hz"))
         brake = _to_float(data.get("brake_hz"))
-        factor = _to_float(data.get("factor"))
         output = _to_float(data.get("output"))
         if target is not None:
             self.target_hz = min(max(target, TARGET_HZ_MIN), TARGET_HZ_MAX)
         if brake is not None:
             self.brake_hz = min(max(brake, BRAKE_HZ_MIN), BRAKE_HZ_MAX)
-        if factor is not None:
-            self.regelung.factor = factor
         self.regelung.output = output
+
+        learned_table = data.get("learned_table")
+        if isinstance(learned_table, dict):
+            self.regelung.load_learned_table(learned_table)
 
     @callback
     def async_start(self) -> None:
@@ -190,8 +177,8 @@ class AcPidFrequencyController:
             "enabled": self.enabled,
             "target_hz": self.target_hz,
             "brake_hz": self.brake_hz,
-            "factor": self.regelung.factor,
             "output": self.regelung.output,
+            "learned_table": self.regelung.learned_table,
         }
 
     # ------------------------------------------------------------------ Bedienung
@@ -212,9 +199,8 @@ class AcPidFrequencyController:
 
     @callback
     def async_reset_learning(self) -> None:
-        """Lernfaktor auf 1,0 und Frequenz-Historie löschen."""
-        self.regelung.factor = 1.0
-        self.regelung.hz_prev1 = self.regelung.hz_prev2 = None
+        """Setzt die gelernte Arbeitspunkt-Tabelle auf Werkseinstellungen zurück."""
+        self.regelung.reset_learning()
         self._publish()
 
     # ------------------------------------------------------------------ Takt
@@ -267,22 +253,64 @@ class AcPidFrequencyController:
             self._handle_missing_data()
             return
 
+        # Optionale Eingangsgrößen lesen
+        outdoor_temp: float | None = None
+        outdoor_ent = cfg.get(CONF_OUTDOOR_TEMP)
+        if outdoor_ent:
+            out_state = self.hass.states.get(outdoor_ent)
+            if out_state is not None and out_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                if out_state.domain == "weather":
+                    outdoor_temp = _to_float(out_state.attributes.get("temperature"))
+                else:
+                    outdoor_temp = _to_float(out_state.state)
+
+        room_temp: float | None = None
+        room_ent = cfg.get(CONF_ROOM_TEMP)
+        if room_ent:
+            room_state = self.hass.states.get(room_ent)
+            if room_state is not None and room_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                room_temp = _to_float(room_state.state)
+        elif climate_ok:
+            room_temp = _to_float(climate.attributes.get("current_temperature"))
+
+        defrost = False
+        defrost_ent = cfg.get(CONF_DEFROST)
+        if defrost_ent:
+            def_state = self.hass.states.get(defrost_ent)
+            if def_state is not None and def_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                defrost = def_state.state.lower() in ("on", "true", "defrost", "defrosting")
+        elif climate_ok:
+            action = str(climate.attributes.get("hvac_action") or "").lower()
+            defrost = action in ("defrosting", "preheating")
+
         self._fault_since = None
-        result = step(self.params, self.regelung, setpoint, hz, self.target_hz, self.brake_hz)
+        result = step(
+            self.params,
+            self.regelung,
+            setpoint,
+            hz,
+            self.target_hz,
+            self.brake_hz,
+            outdoor_temp=outdoor_temp,
+            room_temp=room_temp,
+            defrost=defrost,
+        )
         self.available = True
         self.output = result.published
         self.offset = result.offset
         self.error_hz = result.error_hz
         self.status = result.mode
         _LOGGER.debug(
-            "Takt: soll=%.1f hz=%.1f ziel=%.0f -> %s, sensor=%.1f (offset %.2f, faktor %.2f)",
+            "Takt: soll=%.1f hz=%.1f ziel=%.0f -> %s, sensor=%.1f (offset %.2f, gelernt %.2f K [%s/%s])",
             setpoint,
             hz,
             min(self.target_hz, self.brake_hz),
             result.mode,
             result.published,
             result.offset,
-            result.factor,
+            result.learned_offset,
+            result.outdoor_bin,
+            result.freq_bin,
         )
 
     def _set_inactive(self, status: str) -> None:
