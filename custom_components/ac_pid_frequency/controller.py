@@ -9,8 +9,14 @@
 Fehlerverhalten: Fehlen Eingangsdaten, wird der letzte Wert zunächst gehalten
 (Status ``waiting``). Dauert das länger als ``fault_timeout_min``, wird der Sensor
 ``unavailable`` (Status ``fault``) und die Anlage fällt auf ihren eigenen Innensensor
-zurück. Ist der Regler aus oder die Anlage nicht im Heizbetrieb, ist der Sensor
-sofort ``unavailable``.
+zurück.
+
+Durchreichen (Passthrough): Ist der Regler aus oder die Anlage nicht im Heizbetrieb und ist
+ein echter Raumtemperatursensor konfiguriert, der einen gültigen Wert liefert, gibt der
+erzeugte Sensor dessen Wert 1:1 weiter (Offset 0,0 K) und folgt jeder Änderung sofort. So
+rechnet die Anlage weiter mit dem echten Raumthermometer statt mit ihrem Deckensensor. Nur
+wenn auch dieser Wert fehlt (oder gar kein Raumsensor konfiguriert ist), wird der Sensor
+``unavailable``.
 """
 
 from __future__ import annotations
@@ -60,7 +66,7 @@ from .const import (
     TARGET_HZ_MIN,
     TUNING_DEFAULTS,
 )
-from .regelung import Params, State, step
+from .regelung import Params, State, round1, step
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,6 +118,7 @@ class AcPidFrequencyController:
         self.output: float | None = None
         self.offset: float | None = None
         self.error_hz: float | None = None
+        self.passthrough = False  # True: Sensor spiegelt gerade die echte Raumtemperatur
 
     # ------------------------------------------------------------------ Konfiguration
     @property
@@ -160,6 +167,13 @@ class AcPidFrequencyController:
                 self.hass, [cfg[CONF_CLIMATE]], self._handle_climate_change
             )
         )
+        if cfg.get(CONF_ROOM_TEMP):
+            # Echte Raumtemperatur sofort durchreichen, ohne auf den nächsten Takt zu warten
+            self._unsubs.append(
+                async_track_state_change_event(
+                    self.hass, [cfg[CONF_ROOM_TEMP]], self._handle_room_change
+                )
+            )
         self._tick()
 
     async def async_shutdown(self) -> None:
@@ -218,6 +232,16 @@ class AcPidFrequencyController:
             self._tick()
 
     @callback
+    def _handle_room_change(self, event: Event[EventStateChangedData]) -> None:
+        """Raumtemperatur geändert: nur im Durchreich-Betrieb sofort nachziehen.
+
+        Bei laufender Regelung bleibt es beim Takt, damit kein zusätzlicher Regelschritt
+        ausgelöst wird.
+        """
+        if self.status in (STATUS_OFF, STATUS_IDLE):
+            self._tick()
+
+    @callback
     def _tick(self) -> None:
         self._evaluate()
         self._publish()
@@ -233,7 +257,7 @@ class AcPidFrequencyController:
         cfg = self.config
 
         if not self.enabled:
-            self._set_inactive(STATUS_OFF)
+            self._set_passive(STATUS_OFF)
             return
 
         climate = self.hass.states.get(cfg[CONF_CLIMATE])
@@ -242,8 +266,9 @@ class AcPidFrequencyController:
             STATE_UNKNOWN,
         )
         if climate_ok and climate.state != HVAC_MODE_ACTIVE:
-            # Anlage aus / kühlt / ... -> Sensor sofort weg, Anlage nutzt ihren eigenen
-            self._set_inactive(STATUS_IDLE)
+            # Anlage aus / kühlt / ... -> echte Raumtemperatur durchreichen (falls vorhanden),
+            # sonst Sensor sofort weg, die Anlage nutzt ihren eigenen
+            self._set_passive(STATUS_IDLE)
             return
 
         setpoint = _to_float(climate.attributes.get("temperature")) if climate_ok else None
@@ -264,13 +289,8 @@ class AcPidFrequencyController:
                 else:
                     outdoor_temp = _to_float(out_state.state)
 
-        room_temp: float | None = None
-        room_ent = cfg.get(CONF_ROOM_TEMP)
-        if room_ent:
-            room_state = self.hass.states.get(room_ent)
-            if room_state is not None and room_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                room_temp = _to_float(room_state.state)
-        elif climate_ok:
+        room_temp = self._configured_room_temp()
+        if room_temp is None and not cfg.get(CONF_ROOM_TEMP) and climate_ok:
             room_temp = _to_float(climate.attributes.get("current_temperature"))
 
         defrost = False
@@ -296,6 +316,7 @@ class AcPidFrequencyController:
             defrost=defrost,
         )
         self.available = True
+        self.passthrough = False
         self.output = result.published
         self.offset = result.offset
         self.error_hz = result.error_hz
@@ -313,7 +334,26 @@ class AcPidFrequencyController:
             result.freq_bin,
         )
 
+    def _configured_room_temp(self) -> float | None:
+        """Wert des konfigurierten echten Raumtemperatursensors (None, wenn keiner/ungültig)."""
+        entity_id = self.config.get(CONF_ROOM_TEMP)
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        return _to_float(state.state) if state is not None else None
+
+    def _set_passive(self, status: str) -> None:
+        """Nicht regeln: echte Raumtemperatur durchreichen oder (ohne sie) unavailable."""
+        self._set_inactive(status)
+        room_temp = self._configured_room_temp()
+        if room_temp is not None:
+            self.available = True
+            self.passthrough = True
+            self.output = round1(room_temp)
+            self.offset = 0.0
+
     def _set_inactive(self, status: str) -> None:
+        self.passthrough = False
         self.available = False
         self.output = self.offset = self.error_hz = None
         self.status = status
@@ -334,6 +374,7 @@ class AcPidFrequencyController:
                     self.config[CONF_FAULT_TIMEOUT],
                 )
             self.available = False
+            self.passthrough = False
             self.output = self.offset = self.error_hz = None
             self.status = STATUS_FAULT
             self.regelung.hz_prev1 = self.regelung.hz_prev2 = None

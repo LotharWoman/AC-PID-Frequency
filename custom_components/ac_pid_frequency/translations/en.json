@@ -17,7 +17,7 @@
           "climate_entity": "This entity is read (target temperature, mode) and operated in the card. Its integration must support an external room sensor; enter the generated sensor there afterwards.",
           "frequency_entity": "Entity that reports the current compressor frequency as a number.",
           "outdoor_temp_entity": "Sensor or weather entity for weather-aware learning (cold, moderate, mild).",
-          "room_temp_entity": "Real room thermometer for thermal overheat protection. Fallback: current_temperature of the climate entity.",
+          "room_temp_entity": "Real room thermometer: used for overheat protection and passed 1:1 to the AC while the controller is off or the AC is not heating. Without it the AC falls back to its own indoor sensor.",
           "defrost_entity": "Defrost detection. During defrosting the controller pauses the emergency brake and learning. Fallback: hvac_action of the climate entity.",
           "indoor_units": "Optional. Shown small and read-only in the card."
         }
@@ -50,7 +50,7 @@
           "climate_entity": "Target temperature and mode are read from this entity.",
           "frequency_entity": "Entity that reports the current compressor frequency as a number.",
           "outdoor_temp_entity": "For weather-dependent 2D operating point learning.",
-          "room_temp_entity": "Thermal room limit against unwanted overheating.",
+          "room_temp_entity": "Real room thermometer: overheat protection and pass-through while the controller is off or not heating.",
           "defrost_entity": "Pauses regulation and emergency brake during defrost cycles.",
           "indoor_units": "Optional. Display only in the card."
         }

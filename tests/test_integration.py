@@ -105,8 +105,11 @@ async def test_config_flow_creates_entry_and_rejects_duplicate(hass: HomeAssista
     assert result["reason"] == "already_configured"
 
 
-async def test_sensor_unavailable_while_controller_off(hass: HomeAssistant) -> None:
-    entry = await _setup(hass)
+async def test_sensor_unavailable_while_controller_off_without_room_value(
+    hass: HomeAssistant,
+) -> None:
+    """Regler aus und keine echte Raumtemperatur -> Sensor unavailable (Anlage-Eigensensor)."""
+    entry = await _setup(hass, room=STATE_UNAVAILABLE)
     sensor = _eid(hass, entry, "sensor", "temperature")
     assert hass.states.get(sensor).state == STATE_UNAVAILABLE
     status = hass.states.get(_eid(hass, entry, "sensor", "status"))
@@ -160,8 +163,10 @@ async def test_overheat_protection_triggers(hass: HomeAssistant) -> None:
     assert status.state == "overheat"
 
 
-async def test_sensor_unavailable_when_not_heating(hass: HomeAssistant) -> None:
-    entry = await _setup(hass)
+async def test_sensor_unavailable_when_not_heating_without_room_value(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, room=STATE_UNAVAILABLE)
     sensor = _eid(hass, entry, "sensor", "temperature")
     await hass.services.async_call(
         "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
@@ -309,3 +314,93 @@ async def test_card_is_served(hass: HomeAssistant, hass_client) -> None:
     body = await response.text()
     assert "ac-pid-frequency-card" in body
     assert entry.state is ConfigEntryState.LOADED
+
+
+# --------------------------------------------------------------------------------------
+# Durchreichen der echten Raumtemperatur (Passthrough)
+# --------------------------------------------------------------------------------------
+async def test_passthrough_when_controller_off_follows_room_sensor_immediately(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, room="20.74")
+    sensor = _eid(hass, entry, "sensor", "temperature")
+    status = hass.states.get(_eid(hass, entry, "sensor", "status"))
+    assert status.state == "off"
+    assert status.attributes["passthrough"] is True
+    assert hass.states.get(sensor).state == "20.7"  # auf 0,1 gerundet
+    assert float(hass.states.get(_eid(hass, entry, "sensor", "offset")).state) == 0.0
+
+    # Änderung wird ohne Taktverzögerung weitergegeben
+    hass.states.async_set(ROOM, "21.26")
+    await hass.async_block_till_done()
+    assert hass.states.get(sensor).state == "21.3"
+
+    # Raumsensor fällt aus -> erst jetzt unavailable (Anlage nutzt eigenen Sensor)
+    hass.states.async_set(ROOM, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+    assert hass.states.get(sensor).state == STATE_UNAVAILABLE
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).attributes["passthrough"] is False
+
+    hass.states.async_set(ROOM, "20.0")
+    await hass.async_block_till_done()
+    assert hass.states.get(sensor).state == "20.0"
+
+
+async def test_passthrough_when_not_heating_then_regulation_takes_over(
+    hass: HomeAssistant,
+) -> None:
+    entry = await _setup(hass, climate_state="cool", room="22.4")
+    sensor = _eid(hass, entry, "sensor", "temperature")
+    status = _eid(hass, entry, "sensor", "status")
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    # Regler an, aber Anlage kühlt -> echte Raumtemperatur
+    assert hass.states.get(status).state == "idle"
+    assert hass.states.get(sensor).state == "22.4"
+
+    # Anlage wechselt in den Heizbetrieb -> Regelung übernimmt sofort
+    hass.states.async_set(CLIMATE, "heat", {"temperature": 21.0})
+    await hass.async_block_till_done()
+    assert hass.states.get(status).state != "idle"
+    assert hass.states.get(status).attributes["passthrough"] is False
+    assert hass.states.get(sensor).state != "22.4"
+
+    # ... und zurück: wieder durchreichen
+    hass.states.async_set(CLIMATE, "off", {"temperature": 21.0})
+    await hass.async_block_till_done()
+    assert hass.states.get(sensor).state == "22.4"
+
+
+async def test_room_change_does_not_trigger_extra_regulation_step(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    regelung = entry.runtime_data.regelung
+    before = regelung.time_since_last_step
+
+    hass.states.async_set(ROOM, "20.6")
+    await hass.async_block_till_done()
+    assert regelung.time_since_last_step == before  # kein zusätzlicher Regelschritt
+
+
+async def test_fault_stays_unavailable_even_with_room_sensor(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Fehlt das Hz-Signal zu lange, bleibt der Sensor bewusst unavailable."""
+    entry = await _setup(hass, room="20.5")
+    sensor = _eid(hass, entry, "sensor", "temperature")
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    hass.states.async_set(HZ, STATE_UNAVAILABLE)
+    for minutes in (2, 10):  # erst Fehlerbeginn merken, dann Wartezeit überschreiten
+        freezer.tick(timedelta(minutes=minutes))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "fault"
+    assert hass.states.get(sensor).state == STATE_UNAVAILABLE

@@ -47,8 +47,9 @@ async def async_setup_entry(
 class FakeTemperatureSensor(AcPidFrequencyEntity, SensorEntity):
     """Der "Raumthermometer"-Wert für die Klimaanlage (0,1-K-Schritte).
 
-    Wird ``unavailable``, sobald der Regler nicht regelt – die Anlage fällt dann auf ihren
-    eigenen Innensensor zurück.
+    Regelt der Regler nicht (aus / kein Heizbetrieb), wird die echte Raumtemperatur
+    durchgereicht, sofern ein Raumsensor konfiguriert ist und einen Wert liefert. Sonst wird
+    der Sensor ``unavailable`` und die Anlage fällt auf ihren eigenen Innensensor zurück.
     """
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -98,6 +99,7 @@ class StatusSensor(AcPidFrequencyEntity, SensorEntity):
             "outdoor_temperature_entity": cfg.get(CONF_OUTDOOR_TEMP),
             "room_temperature_entity": cfg.get(CONF_ROOM_TEMP),
             "defrost_entity": cfg.get(CONF_DEFROST),
+            "passthrough": self.controller.passthrough,
             "indoor_units": list(cfg.get(CONF_INDOOR_UNITS) or []),
             "active_outdoor_bin": self.controller.regelung.current_outdoor_bin,
             "active_freq_bin": self.controller.regelung.current_freq_bin,

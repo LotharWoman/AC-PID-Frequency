@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.0.0";
+const HZ_CARD_VERSION = "2.2.0";
 
 const HZ_I18N = {
   de: {
@@ -36,6 +36,7 @@ const HZ_I18N = {
     unavailable: "Nicht verfügbar", current: "Aktuell", compressor: "Kompressor",
     target_hz: "Ziel-Frequenz", brake: "Notbremse ab", controller: "Hz-Regelung",
     sensor: "Sensor", offset: "Offset", factor: "Faktor", other_units: "Weitere Innengeräte",
+    passthrough: "echte Raumtemperatur durchgereicht",
     more: "Details", minus: "Weniger", plus: "Mehr",
     not_found: "Kein AC-PID-Frequency-Regler für diese Klimaanlage gefunden. Ist die Integration eingerichtet?",
     entity: "Klimaanlage (Master-Innengerät)", name: "Name (optional)",
@@ -59,6 +60,7 @@ const HZ_I18N = {
     unavailable: "Unavailable", current: "Currently", compressor: "Compressor",
     target_hz: "Target frequency", brake: "Emergency brake at", controller: "Frequency control",
     sensor: "Sensor", offset: "Offset", factor: "Factor", other_units: "Other indoor units",
+    passthrough: "real room temperature passed through",
     more: "Details", minus: "Less", plus: "More",
     not_found: "No AC PID Frequency controller found for this air conditioner. Is the integration set up?",
     entity: "Air conditioner (master indoor unit)", name: "Name (optional)",
@@ -172,7 +174,10 @@ const HZ_STYLE = `
   .units .cap { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--secondary-text-color); }
   .units .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font-size: 12px; padding: 4px 10px; border-radius: 12px; color: var(--secondary-text-color);
-          background: var(--secondary-background-color, rgba(127,127,127,.12)); display: inline-flex; gap: 6px; align-items: center; }
+          background: var(--secondary-background-color, rgba(127,127,127,.12)); display: inline-flex; gap: 6px; align-items: center;
+          border: none; cursor: pointer; font-family: inherit; transition: background .15s, transform .1s, color .15s; }
+  .chip:hover { background: var(--secondary-background-color, rgba(127,127,127,.25)); color: var(--primary-text-color); }
+  .chip:active { transform: scale(0.97); }
   .chip b { color: var(--primary-text-color); font-weight: 500; }
   .notice { font-size: 13px; color: var(--warning-color, #f4b400); background: var(--secondary-background-color);
             border-radius: 10px; padding: 8px 10px; }
@@ -670,8 +675,13 @@ class AcPidFrequencyCard extends HTMLElement {
     const unit = (hass.config && hass.config.unit_system && hass.config.unit_system.temperature) || "°C";
     const parts = [];
     if (fake != null) parts.push(`${t.sensor} ${this._fmt(fake, 1)} ${unit}`);
-    if (off != null) parts.push(`${t.offset} ${off > 0 ? "+" : ""}${this._fmt(off, 2)} K`);
-    if (fac != null) parts.push(`${t.factor} ${this._fmt(fac, 2)}`);
+    if (ca.passthrough && fake != null) {
+      // Regler regelt nicht: Anlage bekommt 1:1 die echte Raumtemperatur
+      parts.push(t.passthrough);
+    } else {
+      if (off != null) parts.push(`${t.offset} ${off > 0 ? "+" : ""}${this._fmt(off, 2)} K`);
+      if (fac != null) parts.push(`${t.factor} ${this._fmt(fac, 2)}`);
+    }
     $("detail").textContent = parts.join(" · ");
     $("detail").hidden = parts.length === 0;
   }
@@ -720,12 +730,12 @@ class AcPidFrequencyCard extends HTMLElement {
     const unit = (this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.temperature) || "°C";
     const rows = ids.map((id) => {
       const st = this._hass.states[id];
-      if (!st) return [id, t.unavailable];
+      if (!st) return [id, id, t.unavailable];
       const cur = st.attributes.current_temperature;
       const mode = st.attributes.hvac_action && t.actions[st.attributes.hvac_action]
         ? t.actions[st.attributes.hvac_action]
         : t.modes[st.state] || st.state;
-      return [st.attributes.friendly_name || id, `${cur != null ? this._fmt(cur, 1) + " " + unit + " · " : ""}${mode}`];
+      return [id, st.attributes.friendly_name || id, `${cur != null ? this._fmt(cur, 1) + " " + unit + " · " : ""}${mode}`];
     });
     const sig = JSON.stringify(rows);
     if (sig === this._unitsSig) return;
@@ -733,12 +743,16 @@ class AcPidFrequencyCard extends HTMLElement {
     box.hidden = false;
     const chips = $("chips");
     chips.textContent = "";
-    for (const [name, text] of rows) {
-      const chip = document.createElement("span");
+    for (const [id, name, text] of rows) {
+      const chip = document.createElement("button");
+      chip.type = "button";
       chip.className = "chip";
+      chip.title = `${name} (${id})`;
+      chip.setAttribute("aria-label", `${name}: ${text}`);
       const b = document.createElement("b");
       b.textContent = name;
       chip.append(b, document.createTextNode(text));
+      chip.addEventListener("click", () => this._moreInfo(id));
       chips.appendChild(chip);
     }
   }
