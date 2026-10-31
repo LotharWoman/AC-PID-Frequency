@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.2.0";
+const HZ_CARD_VERSION = "2.2.1";
 
 const HZ_I18N = {
   de: {
@@ -33,7 +33,7 @@ const HZ_I18N = {
       defrost: "Abtauen aktiv (pausiert)", overheat: "Überhitzungsschutz aktiv",
       waiting: "Daten fehlen – Wert gehalten", fault: "Fehler – Anlage nutzt eigenen Sensor",
     },
-    unavailable: "Nicht verfügbar", current: "Aktuell", compressor: "Kompressor",
+    unavailable: "Nicht verfügbar", simulated: "Simuliert", real: "Real", outdoor: "Außen", compressor: "Kompressor",
     target_hz: "Ziel-Frequenz", brake: "Notbremse ab", controller: "Hz-Regelung",
     sensor: "Sensor", offset: "Offset", factor: "Faktor", other_units: "Weitere Innengeräte",
     passthrough: "echte Raumtemperatur durchgereicht",
@@ -57,7 +57,7 @@ const HZ_I18N = {
       defrost: "Defrost active (paused)", overheat: "Overheat protection active",
       waiting: "Data missing – value held", fault: "Fault – AC uses its own sensor",
     },
-    unavailable: "Unavailable", current: "Currently", compressor: "Compressor",
+    unavailable: "Unavailable", simulated: "Simulated", real: "Real", outdoor: "Outdoor", compressor: "Compressor",
     target_hz: "Target frequency", brake: "Emergency brake at", controller: "Frequency control",
     sensor: "Sensor", offset: "Offset", factor: "Factor", other_units: "Other indoor units",
     passthrough: "real room temperature passed through",
@@ -113,8 +113,13 @@ const HZ_STYLE = `
   .target .dec { font-size: 26px; margin-top: 6px; }
   .target .unit { font-size: 20px; margin-top: 6px; margin-left: 2px; color: var(--secondary-text-color); }
   .current { font-size: 14px; color: var(--secondary-text-color); margin-top: 4px; }
+  .current + .current { margin-top: 0; }
+  .current:empty { display: none; }
 
-  .pm { display: flex; justify-content: center; gap: 28px; margin-top: -2px; }
+  .pm { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin-top: -2px; }
+  .pm-btns { display: flex; gap: 28px; }
+  .outdoor { justify-self: end; text-align: right; line-height: 1.25; color: var(--secondary-text-color); font-size: 12px; }
+  .outdoor b { display: block; font-size: 15px; font-weight: 500; color: var(--primary-text-color); }
   button.round { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--divider-color, #ccc);
                  background: none; cursor: pointer; color: var(--primary-text-color); display: inline-flex;
                  align-items: center; justify-content: center; --mdc-icon-size: 24px; padding: 0; }
@@ -202,12 +207,17 @@ const HZ_TEMPLATE = `
           <div class="action" id="action"></div>
           <div class="target"><span class="int" id="t-int">–</span><span class="dec" id="t-dec"></span><span class="unit" id="t-unit"></span></div>
           <div class="current" id="current"></div>
+          <div class="current" id="real"></div>
         </div>
       </div>
 
       <div class="pm">
-        <button class="round" id="t-minus" aria-label="-"><ha-icon icon="mdi:minus"></ha-icon></button>
-        <button class="round" id="t-plus" aria-label="+"><ha-icon icon="mdi:plus"></ha-icon></button>
+        <span></span>
+        <div class="pm-btns">
+          <button class="round" id="t-minus" aria-label="-"><ha-icon icon="mdi:minus"></ha-icon></button>
+          <button class="round" id="t-plus" aria-label="+"><ha-icon icon="mdi:plus"></ha-icon></button>
+        </div>
+        <span class="outdoor" id="outdoor" hidden></span>
       </div>
 
       <div id="hz-section">
@@ -577,9 +587,37 @@ class AcPidFrequencyCard extends HTMLElement {
     }
 
     // aktuelle Temperatur: Markierung am Bogen + Text
-    const cur = ca.current_temperature != null ? Number(ca.current_temperature) : null;
+    // Simuliert = Wert des erzeugten Sensors (fällt zurück auf current_temperature der Anlage),
+    // Real = echter Raumsensor aus dem Setup, Außen = Outdoor-Sensor aus dem Setup
+    const ctrl = this._ctrl();
+    const cAttr = (ctrl && ctrl.attributes) || {};
+    let cur = this._num(hass.states[cAttr.temperature_entity]);
+    if (cur == null && ca.current_temperature != null && Number.isFinite(Number(ca.current_temperature))) {
+      cur = Number(ca.current_temperature);
+    }
+    const realState = cAttr.room_temperature_entity && hass.states[cAttr.room_temperature_entity];
+    const real = this._num(realState);
+    $("real").textContent = cAttr.room_temperature_entity
+      ? `${t.real} ${real == null ? "–" : this._fmt(real, 1) + " " + unit}`
+      : "";
+    const outState = cAttr.outdoor_temperature_entity && hass.states[cAttr.outdoor_temperature_entity];
+    let outdoor = null;
+    if (outState) {
+      outdoor = outState.entity_id.startsWith("weather.")
+        ? (Number.isFinite(Number(outState.attributes.temperature)) ? Number(outState.attributes.temperature) : null)
+        : this._num(outState);
+    }
+    const outEl = $("outdoor");
+    outEl.hidden = !cAttr.outdoor_temperature_entity;
+    outEl.textContent = "";
+    if (!outEl.hidden) {
+      outEl.append(document.createTextNode(t.outdoor));
+      const ob = document.createElement("b");
+      ob.textContent = outdoor == null ? "–" : `${this._fmt(outdoor, 1)} ${unit}`;
+      outEl.appendChild(ob);
+    }
     if (cur != null && Number.isFinite(cur)) {
-      $("current").textContent = `${t.current} ${this._fmt(cur, 1)} ${unit}`;
+      $("current").textContent = `${t.simulated} ${this._fmt(cur, 1)} ${unit}`;
       const ang = this._angleFor(cur, m.min, m.max);
       const r = (ang * Math.PI) / 180;
       const r0 = DIAL.r - 14, r1 = DIAL.r + 14;
