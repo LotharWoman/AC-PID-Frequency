@@ -16,6 +16,7 @@ Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home
 * **Abtau-Erkennung (Defrost):** Erkennt Abtauzyklen (über `hvac_action` oder optionalen Sensor) und pausiert Notbremse und Lernen.
 * **Thermischer Überhitzungsschutz:** Bremst die Frequenz ab, wenn die tatsächliche Raumtemperatur die Solltemperatur um mehr als z. B. 1,0 K überschreitet.
 * **Echte Raumtemperatur durchreichen:** Ist der Regler aus (oder die Anlage heizt nicht), gibt der erzeugte Sensor die echte Raumtemperatur 1:1 weiter – die Anlage rechnet dann weiter mit deinem Raumthermometer statt mit ihrem oft zu warmen Deckensensor.
+<img width="640" height="396" alt="grafik" src="https://github.com/user-attachments/assets/ed843f7b-dc5c-435f-b687-df9ae633c192" />
 
 ## Installation
 
@@ -79,6 +80,8 @@ entity: climate.mein_master_innengeraet
 ```
 
 Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und zeigt zusätzlich Kompressor-Ist-Hz mit Balken (Ziel = weiß, Notbremse = rot), Eingabefeld mit +/- für die Ziel-Hz, Regler-Schalter mit Status (inkl. Abtau- und Überhitzungsanzeige), Notbremse und weitere Innengeräte. Ein Klick auf ein weiteres Innengerät öffnet dessen Klima-Dialog (Temperatur, Lüfter usw.).
+<img width="304" height="655" alt="grafik" src="https://github.com/user-attachments/assets/b5844dd4-f5ff-4b46-b974-fc5843bb786e" />
+
 
 ## Logo / Branding
 
