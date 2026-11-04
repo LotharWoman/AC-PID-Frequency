@@ -16,6 +16,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_CAP_MARGIN,
     CONF_CLIMATE,
     CONF_DEADBAND,
     CONF_DEFROST,
@@ -45,6 +46,7 @@ TUNING_FIELDS: list[tuple[str, float, float, float, str]] = [
     (CONF_MAX_OFFSET, 0.1, 5, 0.1, "K"),
     (CONF_MAX_ROOM_OVERHEAT, 0.2, 5, 0.1, "K"),
     (CONF_OFFSET_BRAKE, 0, 3, 0.05, "K"),
+    (CONF_CAP_MARGIN, 1, 30, 1, "Hz"),
     (CONF_FAULT_TIMEOUT, 1, 120, 1, "min"),
 ]
 

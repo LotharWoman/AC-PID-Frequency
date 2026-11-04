@@ -65,6 +65,7 @@
           "max_offset": "Max offset to target temperature",
           "max_room_overheat": "Max room overheating",
           "offset_brake": "Offset on emergency brake",
+          "cap_margin_hz": "Frequency cap: margin below emergency brake",
           "fault_timeout_min": "Fault timeout"
         },
         "data_description": {
@@ -74,6 +75,7 @@
           "max_offset": "Maximum offset in Kelvin relative to target temperature.",
           "max_room_overheat": "If the real room exceeds target by more than this value, thermal throttling activates.",
           "offset_brake": "Offset added when frequency exceeds emergency brake.",
+          "cap_margin_hz": "With the controller off, the frequency cap limits the AC to emergency brake minus this value (Hz).",
           "fault_timeout_min": "If input data is missing longer than this time, the sensor becomes unavailable."
         }
       }
@@ -95,6 +97,7 @@
           "brake": "Emergency brake",
           "defrost": "Defrost active (paused)",
           "overheat": "Overheat protection active",
+          "cap": "Frequency cap active (controller off)",
           "waiting": "Data missing (value held)",
           "fault": "Fault (sensor unavailable)"
         }
@@ -120,6 +123,9 @@
     "switch": {
       "enabled": {
         "name": "Frequency control"
+      },
+      "cap_enabled": {
+        "name": "Frequency cap"
       }
     },
     "button": {

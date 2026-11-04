@@ -11,6 +11,13 @@ Fehlerverhalten: Fehlen Eingangsdaten, wird der letzte Wert zunächst gehalten
 ``unavailable`` (Status ``fault``) und die Anlage fällt auf ihren eigenen Innensensor
 zurück.
 
+Hz-Deckel: Ist der Regler aus, regelt die Anlage mit der echten Raumtemperatur selbst und
+kann weit über die Notbremse hochfahren. Der Hz-Deckel (Schalter, Standard an) überwacht die
+Frequenz deshalb weiter: Liegt sie über der Notbremse, übernimmt ein eigener Regelkern mit dem
+Ziel ``Notbremse - Reserve`` und sendet ``max(echte Raumtemperatur, Regelwert)``. Sobald der
+Regelwert nicht mehr über der echten Raumtemperatur liegt und die Hz unter der Notbremse sind,
+wird wieder durchgereicht. Der Deckel lernt nicht (eigene Kopie der Lerntabelle).
+
 Durchreichen (Passthrough): Ist der Regler aus oder die Anlage nicht im Heizbetrieb und ist
 ein echter Raumtemperatursensor konfiguriert, der einen gültigen Wert liefert, gibt der
 erzeugte Sensor dessen Wert 1:1 weiter (Offset 0,0 K) und folgt jeder Änderung sofort. So
@@ -21,6 +28,7 @@ wenn auch dieser Wert fehlt (oder gar kein Raumsensor konfiguriert ist), wird de
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 from datetime import datetime, timedelta
@@ -41,6 +49,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BRAKE_HZ_MAX,
     BRAKE_HZ_MIN,
+    CONF_CAP_MARGIN,
     CONF_CLIMATE,
     CONF_DEADBAND,
     CONF_DEFROST,
@@ -57,6 +66,7 @@ from .const import (
     DEFAULT_TARGET_HZ,
     DOMAIN,
     HVAC_MODE_ACTIVE,
+    STATUS_CAP,
     STATUS_FAULT,
     STATUS_IDLE,
     STATUS_OFF,
@@ -109,6 +119,7 @@ class AcPidFrequencyController:
 
         # Vom Nutzer einstellbar (per Entität), werden gespeichert
         self.enabled = False
+        self.cap_enabled = True  # Hz-Deckel bei ausgeschaltetem Regler (Standard: an)
         self.target_hz: float = float(DEFAULT_TARGET_HZ)
         self.brake_hz: float = float(DEFAULT_BRAKE_HZ)
 
@@ -119,6 +130,8 @@ class AcPidFrequencyController:
         self.offset: float | None = None
         self.error_hz: float | None = None
         self.passthrough = False  # True: Sensor spiegelt gerade die echte Raumtemperatur
+        self.cap_active = False  # True: Hz-Deckel greift gerade (Status ``cap``)
+        self._cap_state = State()  # eigener Regelkern des Deckels, wird nicht gespeichert
 
     # ------------------------------------------------------------------ Konfiguration
     @property
@@ -143,6 +156,7 @@ class AcPidFrequencyController:
         """Gespeicherten Zustand laden."""
         data = await self._store.async_load() or {}
         self.enabled = bool(data.get("enabled", False))
+        self.cap_enabled = bool(data.get("cap_enabled", True))
         target = _to_float(data.get("target_hz"))
         brake = _to_float(data.get("brake_hz"))
         output = _to_float(data.get("output"))
@@ -189,6 +203,7 @@ class AcPidFrequencyController:
     def _data_to_save(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
+            "cap_enabled": self.cap_enabled,
             "target_hz": self.target_hz,
             "brake_hz": self.brake_hz,
             "output": self.regelung.output,
@@ -199,6 +214,14 @@ class AcPidFrequencyController:
     @callback
     def async_set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
+        self.cap_active = False
+        self._tick()
+
+    @callback
+    def async_set_cap_enabled(self, enabled: bool) -> None:
+        self.cap_enabled = enabled
+        if not enabled:
+            self.cap_active = False
         self._tick()
 
     @callback
@@ -257,7 +280,7 @@ class AcPidFrequencyController:
         cfg = self.config
 
         if not self.enabled:
-            self._set_passive(STATUS_OFF)
+            self._evaluate_disabled()
             return
 
         climate = self.hass.states.get(cfg[CONF_CLIMATE])
@@ -279,29 +302,13 @@ class AcPidFrequencyController:
             return
 
         # Optionale Eingangsgrößen lesen
-        outdoor_temp: float | None = None
-        outdoor_ent = cfg.get(CONF_OUTDOOR_TEMP)
-        if outdoor_ent:
-            out_state = self.hass.states.get(outdoor_ent)
-            if out_state is not None and out_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                if out_state.domain == "weather":
-                    outdoor_temp = _to_float(out_state.attributes.get("temperature"))
-                else:
-                    outdoor_temp = _to_float(out_state.state)
+        outdoor_temp = self._read_outdoor()
 
         room_temp = self._configured_room_temp()
         if room_temp is None and not cfg.get(CONF_ROOM_TEMP) and climate_ok:
             room_temp = _to_float(climate.attributes.get("current_temperature"))
 
-        defrost = False
-        defrost_ent = cfg.get(CONF_DEFROST)
-        if defrost_ent:
-            def_state = self.hass.states.get(defrost_ent)
-            if def_state is not None and def_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                defrost = def_state.state.lower() in ("on", "true", "defrost", "defrosting")
-        elif climate_ok:
-            action = str(climate.attributes.get("hvac_action") or "").lower()
-            defrost = action in ("defrosting", "preheating")
+        defrost = self._read_defrost(climate if climate_ok else None)
 
         self._fault_since = None
         result = step(
@@ -317,6 +324,7 @@ class AcPidFrequencyController:
         )
         self.available = True
         self.passthrough = False
+        self.cap_active = False
         self.output = result.published
         self.offset = result.offset
         self.error_hz = result.error_hz
@@ -333,6 +341,102 @@ class AcPidFrequencyController:
             result.outdoor_bin,
             result.freq_bin,
         )
+
+    def _read_outdoor(self) -> float | None:
+        """Außentemperatur (Sensor oder weather-Entität), None wenn nicht verfügbar."""
+        outdoor_ent = self.config.get(CONF_OUTDOOR_TEMP)
+        if not outdoor_ent:
+            return None
+        out_state = self.hass.states.get(outdoor_ent)
+        if out_state is None or out_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        if out_state.domain == "weather":
+            return _to_float(out_state.attributes.get("temperature"))
+        return _to_float(out_state.state)
+
+    def _read_defrost(self, climate: Any) -> bool:
+        """Abtauen aktiv? Eigener Abtau-Sensor, sonst hvac_action der Klimaanlage."""
+        defrost_ent = self.config.get(CONF_DEFROST)
+        if defrost_ent:
+            def_state = self.hass.states.get(defrost_ent)
+            if def_state is not None and def_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                return def_state.state.lower() in ("on", "true", "defrost", "defrosting")
+            return False
+        if climate is not None:
+            action = str(climate.attributes.get("hvac_action") or "").lower()
+            return action in ("defrosting", "preheating")
+        return False
+
+    def _evaluate_disabled(self) -> None:
+        """Regler aus: durchreichen, aber die Frequenz mit dem Hz-Deckel begrenzen."""
+        cfg = self.config
+        climate = self.hass.states.get(cfg[CONF_CLIMATE])
+        freq = self.hass.states.get(cfg[CONF_FREQUENCY])
+        hz = _to_float(freq.state) if freq is not None else None
+        setpoint = (
+            _to_float(climate.attributes.get("temperature")) if climate is not None else None
+        )
+        heating = climate is not None and climate.state == HVAC_MODE_ACTIVE
+
+        if not self.cap_enabled or not heating or hz is None or setpoint is None:
+            self.cap_active = False
+            self._set_passive(STATUS_OFF)
+            return
+
+        if self._read_defrost(climate):
+            # Abtauen: Deckel pausiert, die Anlage bekommt wie sonst die echte Temperatur
+            self._set_passive(STATUS_OFF)
+            return
+
+        if not self.cap_active:
+            if hz <= self.brake_hz:
+                self._set_passive(STATUS_OFF)
+                return
+            # Deckel greift: frischer Regelkern mit Kopie der Lerntabelle (lernt nicht zurück)
+            self.cap_active = True
+            self._cap_state = State()
+            self._cap_state.learned_table = copy.deepcopy(self.regelung.learned_table)
+            _LOGGER.info(
+                "Hz-Deckel aktiv: %.1f Hz über Notbremse %.0f Hz, Regler ist aus",
+                hz,
+                self.brake_hz,
+            )
+
+        margin = float(cfg[CONF_CAP_MARGIN])
+        cap_target = max(float(TARGET_HZ_MIN), self.brake_hz - margin)
+        result = step(
+            self.params,
+            self._cap_state,
+            setpoint,
+            hz,
+            cap_target,
+            self.brake_hz,
+            outdoor_temp=self._read_outdoor(),
+            room_temp=None,
+        )
+
+        # Referenz: was die Anlage ohne Deckel sehen würde
+        ref = self._configured_room_temp()
+        if ref is None:
+            ref = _to_float(climate.attributes.get("current_temperature"))
+        if ref is None:
+            ref = setpoint
+
+        if result.published <= round1(ref) and hz <= self.brake_hz:
+            # Die Anlage bleibt mit der echten Temperatur von selbst unter dem Deckel
+            _LOGGER.info("Hz-Deckel freigegeben (%.1f Hz)", hz)
+            self.cap_active = False
+            self._set_passive(STATUS_OFF)
+            return
+
+        out = round1(max(result.output, ref))
+        self._fault_since = None
+        self.available = True
+        self.passthrough = False
+        self.output = out
+        self.offset = round(setpoint - out, 2)
+        self.error_hz = result.error_hz
+        self.status = STATUS_CAP
 
     def _configured_room_temp(self) -> float | None:
         """Wert des konfigurierten echten Raumtemperatursensors (None, wenn keiner/ungültig)."""

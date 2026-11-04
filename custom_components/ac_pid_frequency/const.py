@@ -25,6 +25,7 @@ CONF_DEADBAND = "deadband_hz"
 CONF_OFFSET_BRAKE = "offset_brake"
 CONF_MAX_OFFSET = "max_offset"
 CONF_MAX_ROOM_OVERHEAT = "max_room_overheat"
+CONF_CAP_MARGIN = "cap_margin_hz"
 
 DEFAULT_NAME = "AC PID Frequency"
 DEFAULT_FAULT_TIMEOUT_MIN = 10
@@ -38,6 +39,7 @@ TUNING_DEFAULTS: dict[str, float] = {
     CONF_OFFSET_BRAKE: 0.5,
     CONF_MAX_OFFSET: 1.0,
     CONF_MAX_ROOM_OVERHEAT: 1.0,
+    CONF_CAP_MARGIN: 5.0,
 }
 
 # --- Laufzeitwerte (per Entität änderbar, im Store gespeichert) ---------------------------
@@ -53,6 +55,7 @@ STATUS_WAITING = "waiting"  # Eingangsdaten fehlen, letzter Wert wird gehalten
 STATUS_FAULT = "fault"  # Eingangsdaten fehlen zu lange, Sensor ist unavailable
 STATUS_DEFROST = "defrost"  # Abtauen aktiv, Regelung und Lernen pausiert
 STATUS_OVERHEAT = "overheat"  # Raum überhitzt, thermische Bremse aktiv
+STATUS_CAP = "cap"  # Regler aus, Hz-Deckel begrenzt die Eigenregelung der Anlage
 
 STATUSES = [
     STATUS_OFF,
@@ -63,6 +66,7 @@ STATUSES = [
     "brake",
     STATUS_DEFROST,
     STATUS_OVERHEAT,
+    STATUS_CAP,
     STATUS_WAITING,
     STATUS_FAULT,
 ]

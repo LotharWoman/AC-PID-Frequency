@@ -65,6 +65,7 @@
           "max_offset": "Max. Offset zur Solltemperatur",
           "max_room_overheat": "Max. Raumüberhitzung",
           "offset_brake": "Offset bei Notbremse",
+          "cap_margin_hz": "Hz-Deckel: Abstand unter der Notbremse",
           "fault_timeout_min": "Fehler-Wartezeit"
         },
         "data_description": {
@@ -74,6 +75,7 @@
           "max_offset": "Maximaler Offset in Kelvin relativ zur Solltemperatur.",
           "max_room_overheat": "Steigt der echte Raum um mehr als diesen Wert über Soll, wird thermisch gedrosselt.",
           "offset_brake": "Um so viel wird der Sensor wärmer gestellt, wenn die Frequenz die Notbremse überschreitet.",
+          "cap_margin_hz": "Bei ausgeschaltetem Regler begrenzt der Hz-Deckel die Anlage auf Notbremse minus diesen Wert (Hz).",
           "fault_timeout_min": "Fehlen Eingangsdaten länger als diese Zeit, wird der Sensor nicht verfügbar."
         }
       }
@@ -95,6 +97,7 @@
           "brake": "Notbremse",
           "defrost": "Abtauen aktiv (pausiert)",
           "overheat": "Überhitzungsschutz aktiv",
+          "cap": "Hz-Deckel aktiv (Regler aus)",
           "waiting": "Daten fehlen (Wert gehalten)",
           "fault": "Fehler (Sensor nicht verfügbar)"
         }
@@ -120,6 +123,9 @@
     "switch": {
       "enabled": {
         "name": "Hz-Regelung"
+      },
+      "cap_enabled": {
+        "name": "Hz-Deckel"
       }
     },
     "button": {

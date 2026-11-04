@@ -16,7 +16,7 @@ Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home
 * **Abtau-Erkennung (Defrost):** Erkennt Abtauzyklen (über `hvac_action` oder optionalen Sensor) und pausiert Notbremse und Lernen.
 * **Thermischer Überhitzungsschutz:** Bremst die Frequenz ab, wenn die tatsächliche Raumtemperatur die Solltemperatur um mehr als z. B. 1,0 K überschreitet.
 * **Echte Raumtemperatur durchreichen:** Ist der Regler aus (oder die Anlage heizt nicht), gibt der erzeugte Sensor die echte Raumtemperatur 1:1 weiter – die Anlage rechnet dann weiter mit deinem Raumthermometer statt mit ihrem oft zu warmen Deckensensor.
-<img width="640" height="396" alt="grafik" src="https://github.com/user-attachments/assets/ed843f7b-dc5c-435f-b687-df9ae633c192" />
+* **Hz-Deckel bei ausgeschaltetem Regler:** Auch wenn der Regler aus ist und die Anlage mit der echten Raumtemperatur selbst regelt, wird die Notbremse eingehalten. Fährt die Anlage über die Notbremse, sendet die Integration `max(echte Raumtemperatur, Regelwert)` und regelt auf „Notbremse minus Reserve“ (Standard 5 Hz, einstellbar). Sobald die Anlage von selbst darunter bleibt, wird wieder durchgereicht. Abschaltbar über den Schalter *Hz-Deckel* (Standard: an).
 
 ## Installation
 
@@ -43,8 +43,9 @@ Alles lässt sich später ändern: Integration → *Konfigurieren* → „Entit�
 | `number` Ziel-Frequenz | Gewünschte Kompressor-Hz. Hier schreiben eigene Automationen hinein (z. B. PV-Logik) |
 | `number` Notbremse-Frequenz | Oberhalb davon wird der Sensor sofort wärmer gestellt (Standard 70 Hz) |
 | `switch` Hz-Regelung | Regler ein/aus |
+| `switch` Hz-Deckel | Begrenzt bei ausgeschaltetem Regler die Eigenregelung der Anlage auf die Notbremse (Standard an, Status `cap`) |
 | `button` Gelernte Werte zurücksetzen | Setzt die 2D-Lerntabelle auf Standardwerte zurück |
-| Diagnose-Sensoren | Status (inkl. `defrost` und `overheat`), Offset, gelernter Offset, Frequenzabweichung |
+| Diagnose-Sensoren | Status (inkl. `defrost`, `overheat` und `cap`), Offset, gelernter Offset, Frequenzabweichung |
 
 Beispiel für eine eigene Automation (z. B. PV-Logik):
 
@@ -80,8 +81,6 @@ entity: climate.mein_master_innengeraet
 ```
 
 Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und zeigt zusätzlich Kompressor-Ist-Hz mit Balken (Ziel = weiß, Notbremse = rot), Eingabefeld mit +/- für die Ziel-Hz, Regler-Schalter mit Status (inkl. Abtau- und Überhitzungsanzeige), Notbremse und weitere Innengeräte. Ein Klick auf ein weiteres Innengerät öffnet dessen Klima-Dialog (Temperatur, Lüfter usw.).
-<img width="304" height="655" alt="grafik" src="https://github.com/user-attachments/assets/b5844dd4-f5ff-4b46-b974-fc5843bb786e" />
-
 
 ## Logo / Branding
 
@@ -93,3 +92,7 @@ Die Logos liegen im Ordner `custom_components/ac_pid_frequency/brand/` (`icon`, 
 pip install pytest-homeassistant-custom-component home-assistant-frontend
 python -m pytest
 ```
+
+## Beispiel: Markdown-Karte mit Statusübersicht
+
+`examples/markdown-card.yaml` zeigt Frequenz, Temperaturen, Sendetemperatur, Phase und gelernten Erfahrungswert als Tabellen. Nur die Entität des Status-Sensors in der ersten Template-Zeile muss angepasst werden, alles andere liest das Template aus dessen Attributen.

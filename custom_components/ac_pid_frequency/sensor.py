@@ -99,6 +99,7 @@ class StatusSensor(AcPidFrequencyEntity, SensorEntity):
             "outdoor_temperature_entity": cfg.get(CONF_OUTDOOR_TEMP),
             "room_temperature_entity": cfg.get(CONF_ROOM_TEMP),
             "defrost_entity": cfg.get(CONF_DEFROST),
+            "cap_active": self.controller.cap_active,
             "passthrough": self.controller.passthrough,
             "indoor_units": list(cfg.get(CONF_INDOOR_UNITS) or []),
             "active_outdoor_bin": self.controller.regelung.current_outdoor_bin,
@@ -111,6 +112,7 @@ class StatusSensor(AcPidFrequencyEntity, SensorEntity):
             "target_hz_entity": lookup("number", "target_hz"),
             "brake_hz_entity": lookup("number", "brake_hz"),
             "switch_entity": lookup("switch", "enabled"),
+            "cap_switch_entity": lookup("switch", "cap_enabled"),
         }
 
 

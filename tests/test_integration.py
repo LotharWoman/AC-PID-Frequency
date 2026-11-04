@@ -404,3 +404,115 @@ async def test_fault_stays_unavailable_even_with_room_sensor(
         await hass.async_block_till_done()
     assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "fault"
     assert hass.states.get(sensor).state == STATE_UNAVAILABLE
+
+
+# ---------------------------------------------------------------------- Hz-Deckel (Regler aus)
+async def test_cap_switch_exists_and_defaults_to_on(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    assert hass.states.get(_eid(hass, entry, "switch", "cap_enabled")).state == "on"
+    assert entry.runtime_data.cap_enabled is True
+
+
+async def test_cap_inactive_below_brake_passes_room_through(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="60", room="18.8")
+    await _tick(hass, 60)
+    status = hass.states.get(_eid(hass, entry, "sensor", "status"))
+    assert status.state == "off"
+    assert hass.states.get(_eid(hass, entry, "sensor", "temperature")).state == "18.8"
+    assert status.attributes["cap_active"] is False
+
+
+async def test_cap_takes_over_above_brake_and_releases(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="60", room="18.8")
+    temp = _eid(hass, entry, "sensor", "temperature")
+    status = _eid(hass, entry, "sensor", "status")
+    learned_before = {
+        k: dict(v) for k, v in entry.runtime_data.regelung.learned_table.items()
+    }
+
+    # Anlage regelt mit kalter echter Temperatur selbst und fährt über die Notbremse
+    hass.states.async_set(HZ, "84")
+    await _tick(hass, 60)
+    assert hass.states.get(status).state == "cap"
+    assert hass.states.get(status).attributes["cap_active"] is True
+    assert hass.states.get(status).attributes["passthrough"] is False
+    assert float(hass.states.get(temp).state) == 21.5  # Soll 21,0 + Notbremse-Offset 0,5
+
+    # Auch bei weiter steigender echter Temperatur bleibt der Deckel, solange Hz hoch
+    hass.states.async_set(ROOM, "19.2")
+    await _tick(hass, 60)
+    assert hass.states.get(status).state == "cap"
+    assert float(hass.states.get(temp).state) == 21.5
+
+    # Hz sinken unter die Notbremse: Deckel hält (Echtwert noch kalt) statt sofort durchzureichen
+    hass.states.async_set(HZ, "66")
+    await _tick(hass, 60)
+    assert hass.states.get(status).state == "cap"
+    assert float(hass.states.get(temp).state) >= 21.0
+
+    # Raum wird warm genug: Deckel gibt frei und die echte Temperatur wird wieder durchgereicht
+    hass.states.async_set(ROOM, "22.0")
+    await _tick(hass, 60)
+    assert hass.states.get(status).state == "off"
+    assert hass.states.get(temp).state == "22.0"
+    assert hass.states.get(status).attributes["cap_active"] is False
+
+    # Der Deckel hat nichts in die gelernte Tabelle zurückgeschrieben
+    assert entry.runtime_data.regelung.learned_table == learned_before
+
+
+async def test_cap_never_sends_less_than_real_room_temperature(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="84", room="23.0")
+    await _tick(hass, 60)
+    temp = hass.states.get(_eid(hass, entry, "sensor", "temperature"))
+    assert float(temp.state) >= 23.0
+
+
+async def test_cap_can_be_switched_off(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="84", room="18.8")
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": _eid(hass, entry, "switch", "cap_enabled")}, blocking=True
+    )
+    await _tick(hass, 60)
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "off"
+    assert hass.states.get(_eid(hass, entry, "sensor", "temperature")).state == "18.8"
+
+
+async def test_cap_pauses_during_defrost_and_when_not_heating(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="84", room="18.8", defrost="on")
+    await _tick(hass, 60)
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "off"
+    assert hass.states.get(_eid(hass, entry, "sensor", "temperature")).state == "18.8"
+
+    hass.states.async_set(DEFROST, "off")
+    await _tick(hass, 60)
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "cap"
+
+    hass.states.async_set(CLIMATE, "off", {"temperature": 21.0})
+    await _tick(hass, 60)
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "off"
+    assert hass.states.get(_eid(hass, entry, "sensor", "temperature")).state == "18.8"
+
+
+async def test_turning_regulation_on_ends_cap(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="84", room="18.8")
+    await _tick(hass, 60)
+    assert entry.runtime_data.cap_active is True
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert entry.runtime_data.cap_active is False
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "brake"
+
+
+async def test_cap_state_persists_setting(hass: HomeAssistant, hass_storage) -> None:
+    entry = await _setup(hass)
+    await hass.services.async_call(
+        "switch", "turn_off", {"entity_id": _eid(hass, entry, "switch", "cap_enabled")}, blocking=True
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.cap_enabled is False

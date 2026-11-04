@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.2.1";
+const HZ_CARD_VERSION = "2.3.0";
 
 const HZ_I18N = {
   de: {
@@ -30,7 +30,7 @@ const HZ_I18N = {
     status: {
       off: "Regler aus", idle: "Wartet (kein Heizbetrieb)", raise: "Frequenz erhöhen",
       lower: "Frequenz senken", hold: "Im Zielbereich (lernend)", brake: "Notbremse aktiv",
-      defrost: "Abtauen aktiv (pausiert)", overheat: "Überhitzungsschutz aktiv",
+      defrost: "Abtauen aktiv (pausiert)", overheat: "Überhitzungsschutz aktiv", cap: "Hz-Deckel aktiv (Regler aus)",
       waiting: "Daten fehlen – Wert gehalten", fault: "Fehler – Anlage nutzt eigenen Sensor",
     },
     unavailable: "Nicht verfügbar", simulated: "Simuliert", real: "Real", outdoor: "Außen", compressor: "Kompressor",
@@ -54,7 +54,7 @@ const HZ_I18N = {
     status: {
       off: "Controller off", idle: "Waiting (not heating)", raise: "Raising frequency",
       lower: "Lowering frequency", hold: "On target (learning)", brake: "Emergency brake",
-      defrost: "Defrost active (paused)", overheat: "Overheat protection active",
+      defrost: "Defrost active (paused)", overheat: "Overheat protection active", cap: "Frequency cap active (controller off)",
       waiting: "Data missing – value held", fault: "Fault – AC uses its own sensor",
     },
     unavailable: "Unavailable", simulated: "Simulated", real: "Real", outdoor: "Outdoor", compressor: "Compressor",
@@ -704,7 +704,7 @@ class AcPidFrequencyCard extends HTMLElement {
     const status = ctrl.state;
     const statusEl = $("status");
     statusEl.textContent = t.status[status] || status;
-    statusEl.className = "status" + (status === "fault" ? " err" : status === "waiting" || status === "brake" ? " warn" : "");
+    statusEl.className = "status" + (status === "fault" ? " err" : status === "waiting" || status === "brake" || status === "cap" ? " warn" : "");
 
     // Details zum vorgetäuschten Sensor
     const fake = this._num(hass.states[ca.temperature_entity]);
