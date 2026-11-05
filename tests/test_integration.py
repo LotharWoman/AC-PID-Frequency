@@ -436,19 +436,20 @@ async def test_cap_takes_over_above_brake_and_releases(hass: HomeAssistant) -> N
     assert hass.states.get(status).state == "cap"
     assert hass.states.get(status).attributes["cap_active"] is True
     assert hass.states.get(status).attributes["passthrough"] is False
-    assert float(hass.states.get(temp).state) == 21.5  # Soll 21,0 + Notbremse-Offset 0,5
+    # Gestuft statt Sprung: echte Temperatur 18,8 + ein Bremsschritt (max. 0,5 K)
+    assert float(hass.states.get(temp).state) == 19.3
 
     # Auch bei weiter steigender echter Temperatur bleibt der Deckel, solange Hz hoch
     hass.states.async_set(ROOM, "19.2")
     await _tick(hass, 60)
     assert hass.states.get(status).state == "cap"
-    assert float(hass.states.get(temp).state) == 21.5
+    assert float(hass.states.get(temp).state) >= 19.3
 
     # Hz sinken unter die Notbremse: Deckel hält (Echtwert noch kalt) statt sofort durchzureichen
     hass.states.async_set(HZ, "66")
     await _tick(hass, 60)
     assert hass.states.get(status).state == "cap"
-    assert float(hass.states.get(temp).state) >= 21.0
+    assert float(hass.states.get(temp).state) >= 19.2  # nie unter der echten Temperatur
 
     # Raum wird warm genug: Deckel gibt frei und die echte Temperatur wird wieder durchgereicht
     hass.states.async_set(ROOM, "22.0")
@@ -516,3 +517,19 @@ async def test_cap_state_persists_setting(hass: HomeAssistant, hass_storage) -> 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.runtime_data.cap_enabled is False
+
+
+async def test_cap_holds_while_room_far_below_setpoint_even_at_low_hz(hass: HomeAssistant) -> None:
+    """Kein Freigeben bei niedrigen Hz, solange die echte Temperatur weit unter Soll liegt."""
+    entry = await _setup(hass, hz="84", room="19.0")
+    status = _eid(hass, entry, "sensor", "status")
+    temp = _eid(hass, entry, "sensor", "temperature")
+    await _tick(hass, 60)
+    assert hass.states.get(status).state == "cap"
+
+    hass.states.async_set(HZ, "30")
+    for _ in range(12):
+        await _tick(hass, 60)
+    assert hass.states.get(status).state == "cap"
+    # Regelwert nie kälter als die echte Temperatur
+    assert float(hass.states.get(temp).state) >= 19.0

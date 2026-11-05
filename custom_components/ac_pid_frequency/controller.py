@@ -28,7 +28,6 @@ wenn auch dieser Wert fehlt (oder gar kein Raumsensor konfiguriert ist), wird de
 
 from __future__ import annotations
 
-import copy
 import logging
 import math
 from datetime import datetime, timedelta
@@ -76,6 +75,7 @@ from .const import (
     TARGET_HZ_MIN,
     TUNING_DEFAULTS,
 )
+from .deckel import CapState, can_release, step_cap
 from .regelung import Params, State, round1, step
 
 _LOGGER = logging.getLogger(__name__)
@@ -131,7 +131,7 @@ class AcPidFrequencyController:
         self.error_hz: float | None = None
         self.passthrough = False  # True: Sensor spiegelt gerade die echte Raumtemperatur
         self.cap_active = False  # True: Hz-Deckel greift gerade (Status ``cap``)
-        self._cap_state = State()  # eigener Regelkern des Deckels, wird nicht gespeichert
+        self._cap_state = CapState()  # eigener Regelkern des Deckels, wird nicht gespeichert
 
     # ------------------------------------------------------------------ Konfiguration
     @property
@@ -388,14 +388,20 @@ class AcPidFrequencyController:
             self._set_passive(STATUS_OFF)
             return
 
+        # Referenz: was die Anlage ohne Deckel sehen würde
+        ref = self._configured_room_temp()
+        if ref is None:
+            ref = _to_float(climate.attributes.get("current_temperature"))
+        if ref is None:
+            ref = setpoint
+
         if not self.cap_active:
             if hz <= self.brake_hz:
                 self._set_passive(STATUS_OFF)
                 return
-            # Deckel greift: frischer Regelkern mit Kopie der Lerntabelle (lernt nicht zurück)
+            # Deckel greift: frischer Regelkern, startet bei der echten Temperatur
             self.cap_active = True
-            self._cap_state = State()
-            self._cap_state.learned_table = copy.deepcopy(self.regelung.learned_table)
+            self._cap_state = CapState()
             _LOGGER.info(
                 "Hz-Deckel aktiv: %.1f Hz über Notbremse %.0f Hz, Regler ist aus",
                 hz,
@@ -404,26 +410,12 @@ class AcPidFrequencyController:
 
         margin = float(cfg[CONF_CAP_MARGIN])
         cap_target = max(float(TARGET_HZ_MIN), self.brake_hz - margin)
-        result = step(
-            self.params,
-            self._cap_state,
-            setpoint,
-            hz,
-            cap_target,
-            self.brake_hz,
-            outdoor_temp=self._read_outdoor(),
-            room_temp=None,
+        result = step_cap(
+            self.params, self._cap_state, setpoint, hz, self.brake_hz, cap_target, ref
         )
 
-        # Referenz: was die Anlage ohne Deckel sehen würde
-        ref = self._configured_room_temp()
-        if ref is None:
-            ref = _to_float(climate.attributes.get("current_temperature"))
-        if ref is None:
-            ref = setpoint
-
-        if result.published <= round1(ref) and hz <= self.brake_hz:
-            # Die Anlage bleibt mit der echten Temperatur von selbst unter dem Deckel
+        if can_release(setpoint, ref, result.output, hz, self.brake_hz):
+            # Raum nah am Soll und die Anlage bleibt mit der echten Temperatur von selbst darunter
             _LOGGER.info("Hz-Deckel freigegeben (%.1f Hz)", hz)
             self.cap_active = False
             self._set_passive(STATUS_OFF)

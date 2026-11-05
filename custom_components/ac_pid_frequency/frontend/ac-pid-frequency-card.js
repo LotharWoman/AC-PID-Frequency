@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.3.0";
+const HZ_CARD_VERSION = "2.3.1";
 
 const HZ_I18N = {
   de: {

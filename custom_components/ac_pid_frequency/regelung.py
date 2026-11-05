@@ -348,3 +348,94 @@ def step(
         freq_bin=freq_bin,
         learned_offset=s.current_learned_offset,
     )
+
+
+# ======================================================================================
+# Hz-Deckel (Regler aus): eigener, vorausschauender Regler für die Eigenregelung der Anlage
+# ======================================================================================
+# Die Anlage reagiert mit mehreren Minuten Verzögerung und integrierend auf die Abweichung
+# zwischen Soll und Sensor. Der Deckel arbeitet deshalb mit kleinen Schritten, bremst schon
+# bei steigendem Trend vor dem Überschreiten der Notbremse und gibt erst frei, wenn die echte
+# Raumtemperatur nahe genug am Sollwert liegt.
+
+CAP_BRAKE_STEP = 0.3        # K je Takt, solange die Hz über der Notbremse liegen
+CAP_PREBRAKE_STEP = 0.2     # K je Takt, wenn die Hz absehbar die Notbremse überschreiten
+CAP_NEAR_STEP = 0.1         # K je Takt knapp unter der Notbremse (zu hoch) bei steigendem Trend
+CAP_LEAD_TICKS = 2.0        # Vorhersage: Hz in so vielen Takten (Totzeit der Anlage)
+CAP_FAST_BELOW_HZ = 20.0    # Abstand unter dem Ziel, ab dem schneller abgesenkt wird
+CAP_RELEASE_K = 0.3         # Freigabe, wenn echte Raumtemperatur höchstens so viel unter Soll liegt
+
+
+@dataclass
+class CapState:
+    """Gedächtnis des Hz-Deckels (wird nicht gespeichert)."""
+
+    output: float | None = None
+    hz_prev: float | None = None
+    time_since_step: float = 0.0
+
+
+@dataclass(frozen=True)
+class CapResult:
+    output: float       # an die Anlage gesendeter Wert (>= echte Raumtemperatur, 0,1 K)
+    error_hz: float     # Ziel (Notbremse - Reserve) minus Ist
+    release: bool       # True: Deckel kann freigeben, echte Temperatur durchreichen
+
+
+def cap_step(
+    p: Params,
+    cs: CapState,
+    setpoint: float,
+    hz: float,
+    ref: float,
+    brake_hz: float,
+    margin_hz: float,
+) -> CapResult:
+    """Ein Takt des Hz-Deckels.
+
+    ``ref`` ist die Temperatur, die die Anlage ohne Deckel sähe (echter Raumsensor); der
+    gesendete Wert liegt nie darunter.
+    """
+    cs.time_since_step += p.interval_s
+    target = max(10.0, brake_hz - margin_hz)
+    low_edge = target - p.deadband_hz
+    high_edge = target + p.deadband_hz
+
+    if cs.output is None:
+        cs.output = ref  # die Anlage sieht bisher die echte Temperatur
+    trend = hz - cs.hz_prev if cs.hz_prev is not None else 0.0
+    cs.hz_prev = hz
+    predicted = hz + CAP_LEAD_TICKS * trend
+
+    out = cs.output
+    if hz > brake_hz:
+        # Über der Notbremse: in Stufen wärmer, außer die Hz fallen schon zügig
+        if trend > -2.0:
+            out += CAP_BRAKE_STEP
+            cs.time_since_step = 0.0
+    elif predicted >= brake_hz and trend >= 0.5:
+        # Steigt auf die Notbremse zu: vorher gegensteuern
+        out += CAP_PREBRAKE_STEP
+        cs.time_since_step = 0.0
+    elif hz > high_edge:
+        if trend >= 0.0:
+            out += CAP_NEAR_STEP
+            cs.time_since_step = 0.0
+    elif hz < low_edge:
+        # Zu wenig Hz: kälter stellen, aber nicht, solange die Anlage von selbst anzieht
+        if trend < 1.0:
+            wait = 0.0 if hz < target - CAP_FAST_BELOW_HZ else p.reaction_time_s
+            if cs.time_since_step >= wait:
+                out -= 0.1
+                cs.time_since_step = 0.0
+
+    out = min(max(out, setpoint - p.max_offset), setpoint + p.max_offset)
+    out = max(out, ref)  # nie kälter als die echte Temperatur (kein Aufziehen im Leerlauf)
+    cs.output = out
+
+    release = (
+        round1(out) <= round1(ref)
+        and ref >= setpoint - CAP_RELEASE_K
+        and hz <= brake_hz
+    )
+    return CapResult(output=round1(out), error_hz=round(target - hz, 1), release=release)
