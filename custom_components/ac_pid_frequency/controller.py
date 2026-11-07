@@ -47,7 +47,9 @@ from .const import (
     CONF_MAX_OFFSET,
     CONF_MAX_ROOM_OVERHEAT,
     CONF_OUTDOOR_TEMP,
+    CONF_PROBE_INTERVAL,
     CONF_ROOM_TEMP,
+    CONF_WEATHER_TRIGGER_DELTA,
     DEFAULT_TARGET_HZ,
     DOMAIN,
     HVAC_MODE_ACTIVE,
@@ -126,6 +128,8 @@ class AcPidFrequencyController:
             interval_s=float(c[CONF_INTERVAL]),
             max_offset=float(c[CONF_MAX_OFFSET]),
             max_room_overheat=float(c[CONF_MAX_ROOM_OVERHEAT]),
+            weather_trigger_delta_k=float(c.get(CONF_WEATHER_TRIGGER_DELTA, 5.0)),
+            probe_interval_min=float(c.get(CONF_PROBE_INTERVAL, 240.0)),
         )
 
     # ------------------------------------------------------------------ Lebenszyklus
@@ -193,6 +197,12 @@ class AcPidFrequencyController:
     def async_reset_learning(self) -> None:
         """Setzt die gelernte Arbeitspunkt-Tabelle und Anlageneigenschaften auf Werkseinstellungen zurück."""
         self.regelung.reset_learning()
+        self._publish()
+
+    @callback
+    def async_reset_min_hz(self) -> None:
+        """Setzt die gelernte Mindestmodulation auf die Werkseinstellungen zurück."""
+        self.regelung.reset_min_hz()
         self._publish()
 
     # ------------------------------------------------------------------ Takt

@@ -1,4 +1,4 @@
-"""Knopf: Lernfaktor zurücksetzen."""
+"""Knöpfe: Lernfaktor und Mindestmodulation zurücksetzen."""
 
 from __future__ import annotations
 
@@ -15,7 +15,13 @@ from .entity import AcPidFrequencyEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([ResetLearningButton(entry.runtime_data)])
+    controller: AcPidFrequencyController = entry.runtime_data
+    async_add_entities(
+        [
+            ResetLearningButton(controller),
+            ResetMinHzButton(controller),
+        ]
+    )
 
 
 class ResetLearningButton(AcPidFrequencyEntity, ButtonEntity):
@@ -27,3 +33,14 @@ class ResetLearningButton(AcPidFrequencyEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         self.controller.async_reset_learning()
+
+
+class ResetMinHzButton(AcPidFrequencyEntity, ButtonEntity):
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:arrow-collapse-down"
+
+    def __init__(self, controller: AcPidFrequencyController) -> None:
+        super().__init__(controller, "reset_min_hz")
+
+    async def async_press(self) -> None:
+        self.controller.async_reset_min_hz()

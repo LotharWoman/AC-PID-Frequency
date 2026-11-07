@@ -76,9 +76,7 @@ content: |-
   {% if hz is number and ziel is number -%}
   | Abweichung | {{ '%+.1f' | format(hz - ziel) }} Hz |
   {% endif -%}
-  {% if min_hz is number and min_hz > 12 -%}
-  | Mindestmodulation | {{ (min_hz | round(1) ~ ' Hz') }} |
-  {% endif -%}
+  | Erlernte Mindest-Hz | **{{ (min_hz | round(1) ~ ' Hz') if min_hz is number else '–' }}** |
 
   | Temperatur | |
   |:--|--:|

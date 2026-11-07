@@ -24,7 +24,9 @@ from .const import (
     CONF_MAX_ROOM_OVERHEAT,
     CONF_NAME,
     CONF_OUTDOOR_TEMP,
+    CONF_PROBE_INTERVAL,
     CONF_ROOM_TEMP,
+    CONF_WEATHER_TRIGGER_DELTA,
     DEFAULT_NAME,
     DOMAIN,
     TUNING_DEFAULTS,
@@ -36,6 +38,8 @@ FREQUENCY_DOMAINS = ["sensor", "number", "input_number"]
 TUNING_FIELDS: list[tuple[str, float, float, float, str]] = [
     (CONF_MAX_OFFSET, 0.5, 5.0, 0.1, "K"),
     (CONF_MAX_ROOM_OVERHEAT, 0.2, 5.0, 0.1, "K"),
+    (CONF_WEATHER_TRIGGER_DELTA, 1.0, 15.0, 0.5, "K"),
+    (CONF_PROBE_INTERVAL, 30, 720, 15, "min"),
 ]
 
 

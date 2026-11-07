@@ -116,6 +116,8 @@ class StatusSensor(AcPidFrequencyEntity, SensorEntity):
             "min_hz_entity": lookup("sensor", "learned_min_hz"),
             "target_hz_entity": lookup("number", "target_hz"),
             "switch_entity": lookup("switch", "enabled"),
+            "reset_min_hz_button_entity": lookup("button", "reset_min_hz"),
+            "reset_learning_button_entity": lookup("button", "reset_learning"),
         }
 
 

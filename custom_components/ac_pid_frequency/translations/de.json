@@ -57,14 +57,18 @@
       },
       "tuning": {
         "title": "Regelparameter",
-        "description": "Reaktionszeiten und Mindestmodulation werden vom Algorithmus selbst gelernt. Hier kannst du nur noch Sicherheitsgrenzen festlegen.",
+        "description": "Reaktionszeiten und Mindestmodulation werden vom Algorithmus selbst gelernt. Hier kannst du Schutzgrenzen und Dynamik-Trigger anpassen.",
         "data": {
           "max_offset": "Max. Offset zur Solltemperatur",
-          "max_room_overheat": "Max. Raumüberhitzung"
+          "max_room_overheat": "Max. Raumüberhitzung",
+          "weather_trigger_delta_k": "Wettertrigger (Außentemperatur-Änderung)",
+          "probe_interval_min": "Soft Probing Intervall"
         },
         "data_description": {
           "max_offset": "Maximaler Offset in Kelvin relativ zur Solltemperatur.",
-          "max_room_overheat": "Steigt der echte Raum um mehr als diesen Wert über Soll, wird thermisch gedrosselt."
+          "max_room_overheat": "Steigt der echte Raum um mehr als diesen Wert über Soll, wird thermisch gedrosselt.",
+          "weather_trigger_delta_k": "Ändert sich die Außentemperatur um mindestens diesen Wert (Standard 5 K), wird die Mindestmodulation zur Neu-Validierung freigegeben.",
+          "probe_interval_min": "Läuft die Anlage diese Zeit (Standard 240 min) ununterbrochen auf Mindestmodulation, tastet der Regler sanft nach unten ab."
         }
       }
     }
@@ -115,6 +119,9 @@
     "button": {
       "reset_learning": {
         "name": "Gelernte Werte zurücksetzen"
+      },
+      "reset_min_hz": {
+        "name": "Erlernte Mindestmodulation zurücksetzen"
       }
     }
   }

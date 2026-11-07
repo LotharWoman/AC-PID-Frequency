@@ -22,6 +22,8 @@ CONF_INTERVAL = "interval_s"
 CONF_FAULT_TIMEOUT = "fault_timeout_min"
 CONF_MAX_OFFSET = "max_offset"
 CONF_MAX_ROOM_OVERHEAT = "max_room_overheat"
+CONF_WEATHER_TRIGGER_DELTA = "weather_trigger_delta_k"
+CONF_PROBE_INTERVAL = "probe_interval_min"
 
 DEFAULT_NAME = "AC PID Frequency"
 DEFAULT_FAULT_TIMEOUT_MIN = 10
@@ -32,6 +34,8 @@ TUNING_DEFAULTS: dict[str, float] = {
     CONF_FAULT_TIMEOUT: DEFAULT_FAULT_TIMEOUT_MIN,
     CONF_MAX_OFFSET: 2.0,
     CONF_MAX_ROOM_OVERHEAT: 1.0,
+    CONF_WEATHER_TRIGGER_DELTA: 5.0,
+    CONF_PROBE_INTERVAL: 240.0,
 }
 
 # --- Laufzeitwerte (per Entität änderbar, im Store gespeichert) ---------------------------
