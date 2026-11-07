@@ -1,155 +1,129 @@
-"""Tests des Hz-Deckel-Regelkerns, inkl. grobem Anlagenmodell (träge, integrierend)."""
+"""Tests des Regelkerns mit einem dynamischen Anlagenmodell (Mindestmodulation, Trägheit, Defrost)."""
 
 from __future__ import annotations
 
 from collections import deque
+import importlib.util
+from pathlib import Path
+import sys
 
-from custom_components.ac_pid_frequency.deckel import (
-    CapState,
-    can_release,
-    step_cap,
-)
-from custom_components.ac_pid_frequency.regelung import Params
+_PATH = Path(__file__).parent.parent / "custom_components" / "ac_pid_frequency" / "regelung.py"
+_spec = importlib.util.spec_from_file_location("regelung", _PATH)
+regelung = importlib.util.module_from_spec(_spec)
+sys.modules["regelung"] = regelung
+_spec.loader.exec_module(regelung)
 
-P = Params()  # Takt 60 s, Reaktionszeit 120 s, Totband 3 Hz, max_offset 1,0 K
-SOLL, BRAKE, TARGET = 21.0, 70.0, 65.0
+Params = regelung.Params
+State = regelung.State
+step = regelung.step
 
-
-def _step(s: CapState, hz: float, ref: float = 20.3):
-    return step_cap(P, s, SOLL, hz, BRAKE, TARGET, ref)
-
-
-def test_brake_is_staged_relative_to_real_temperature_not_a_jump() -> None:
-    s = CapState()
-    r = _step(s, 74.0)
-    assert r.mode == "brake"
-    # Start bei der echten Temperatur (20,3), dann nur ein Schritt, kein Sprung auf Soll + 0,5
-    assert 20.3 < r.output <= 20.3 + 0.5
-    r2 = _step(s, 77.0)  # steigt weiter schnell: sofort nachlegen
-    assert r2.output > r.output
-    assert r2.output < SOLL + 0.5
+P = Params(interval_s=60.0)
+SOLL = 21.0
 
 
-def test_brake_waits_for_effect_before_next_step() -> None:
-    s = CapState()
-    first = _step(s, 74.0).output
-    second = _step(s, 74.0).output  # nur 60 s später, Hz stehen: Wirkung abwarten (Totzeit)
-    assert second == first
-    third = _step(s, 74.0).output  # Reaktionszeit (120 s) verstrichen, noch drüber: nachlegen
-    assert third > first
+class RealisticAcModel:
+    """Modell einer echten Inverter-Klimaanlage.
 
-
-def test_bigger_excess_gives_bigger_brake_step() -> None:
-    small = _step(CapState(), 71.0).output
-    big = _step(CapState(), 80.0).output
-    assert big > small
-
-
-def test_no_lowering_while_plant_is_accelerating_by_itself() -> None:
-    s = CapState()
-    s.output = 20.8
-    out = []
-    for hz in (44.0, 50.0, 56.0, 61.0):  # +5 Hz je Minute, noch unter dem Ziel
-        out.append(_step(s, hz).output)
-    assert max(out) <= 20.8  # nie kälter gestellt (Anlage läuft ohnehin hoch)
-    assert min(out) >= 20.8 - 1e-9 or out[-1] >= out[0]
-
-
-def test_early_warming_when_approaching_limit() -> None:
-    s = CapState()
-    s.output = 20.5
-    _step(s, 54.0)
-    _step(s, 58.0)
-    before = _step(s, 60.0).output
-    r = _step(s, 64.0)  # ~ +3 Hz/min: in 3 min deutlich über Ziel -> nicht weiter absenken
-    assert r.mode == "lower"
-    assert r.output >= before
-
-
-def test_far_below_target_steps_down_then_waits_for_effect() -> None:
-    s = CapState()
-    s.output = 21.2
-    a = _step(s, 40.0).output  # weit unter Ziel: größerer Schritt
-    assert a < 21.2
-    b = _step(s, 40.0).output  # 60 s später: Totzeit abwarten
-    assert b == a
-    c = _step(s, 40.0).output  # Reaktionszeit verstrichen
-    assert c < b
-
-
-def test_output_never_below_real_room_temperature() -> None:
-    s = CapState()
-    for _ in range(30):
-        r = _step(s, 30.0, ref=20.6)
-    assert r.output >= 20.6
-
-
-def test_output_bounded_by_max_offset() -> None:
-    s = CapState()
-    for _ in range(30):
-        r = _step(s, 90.0)
-    assert r.output <= SOLL + P.max_offset
-
-
-def test_release_needs_room_close_to_setpoint() -> None:
-    # Echte Temperatur noch 0,7 K unter Soll: kein Freigeben, auch wenn Regelwert = echte Temperatur
-    assert not can_release(SOLL, 20.3, 20.3, 50.0, BRAKE)
-    # Raum nah am Soll und Regelwert zurückgenommen: frei
-    assert can_release(SOLL, 20.8, 20.8, 50.0, BRAKE)
-    # Regelwert noch über echter Temperatur: noch nicht
-    assert not can_release(SOLL, 20.8, 21.0, 50.0, BRAKE)
-    # Über der Notbremse nie
-    assert not can_release(SOLL, 20.8, 20.8, 71.0, BRAKE)
-
-
-# ---------------------------------------------------------------------- Anlagenmodell
-class FakeAc:
-    """Grobes Modell nach dem Verlauf vom 05.11.: Totzeit, träge, mit integrierendem Anteil.
-
-    d = Soll - Sensor. Bei d = 0,45 K bleibt die Anlage ruhig bei ~45 Hz, bei größerem d
-    läuft sie hoch, bei kleinerem fällt sie bis ~36 Hz.
+    Besonderheiten:
+    * Verzögerung (Totzeit / Kommunikationsintervall)
+    * Träger Anstieg / Abfall (Ramp-Rate)
+    * Feste physikalische Mindestmodulation (min_hz, z. B. 26.0 Hz):
+      Kann nicht darunter laufen. Wird der Sensor wärmer als Soll + 0.3 K, schaltet
+      die Anlage komplett aus (0 Hz, Thermo-Off).
+    * Defrost-Zyklen
     """
 
-    def __init__(self, hz: float = 50.0, delay_min: int = 2) -> None:
-        self.hz = hz
-        self.buf: deque[float] = deque([0.45] * delay_min, maxlen=delay_min)
+    def __init__(self, start_hz: float = 40.0, min_hz: float = 26.0, delay_ticks: int = 2) -> None:
+        self.hz = start_hz
+        self.min_hz = min_hz
+        self.is_off = False
+        self.buf: deque[float] = deque([0.35] * delay_ticks, maxlen=delay_ticks)
 
-    def minute(self, sensor: float) -> float:
-        self.buf.append(SOLL - sensor)
-        d = self.buf[0]
-        rate = max(-7.0, min(6.0, (d - 0.45) * 20.0))  # Hz je Minute
-        self.hz = max(36.0, min(95.0, self.hz + rate))
+    def tick(self, sensor: float, defrost: bool = False) -> float:
+        if defrost:
+            self.hz = 72.0  # Hohe Abtaufrequenz
+            return self.hz
+
+        # Offset zur Solltemperatur
+        d = SOLL - sensor
+        self.buf.append(d)
+        delayed_d = self.buf[0]
+
+        if delayed_d < -0.25:
+            # Zu warm -> Kompressor schaltet ab (Thermo-Off)
+            self.is_off = True
+            self.hz = 0.0
+            return self.hz
+
+        if self.is_off:
+            if delayed_d >= 0.2:
+                # Genug Kältebedarf -> Kompressor schaltet wieder ein
+                self.is_off = False
+                self.hz = self.min_hz + 5.0
+            else:
+                self.hz = 0.0
+            return self.hz
+
+        # Normale Modulation: Strebt Frequenz proportional zum Offset an
+        desired_hz = max(self.min_hz, 20.0 + delayed_d * 30.0)
+        # Träge Rampenbewegung
+        if self.hz < desired_hz:
+            self.hz = min(desired_hz, self.hz + 3.0)
+        elif self.hz > desired_hz:
+            self.hz = max(desired_hz, self.hz - 3.0)
+
+        # Kann nicht unter min_hz modulieren
+        self.hz = max(self.min_hz, min(90.0, self.hz))
         return self.hz
 
 
-def _simulate(minutes: int, ref: float = 20.3, start_hz: float = 50.0):
-    ac, s = FakeAc(start_hz), CapState()
-    sensor, hz = ref, start_hz
+def test_simulation_target_below_minimum_modulation_prevents_cycling():
+    """Wenn die Soll-Hz unter der Mindestmodulation liegt, lernt der Algorithmus
+
+    die Grenze und stabilisiert die Anlage auf dem Minimum, sodass sie dauerhaft
+    durchläuft und nicht mehr ausgeht.
+    """
+    ac = RealisticAcModel(start_hz=35.0, min_hz=26.0, delay_ticks=2)
+    s = State()
+    target_hz = 18.0  # Unerreichbar niedrig!
+
+    hz = ac.hz
     trace = []
-    for _ in range(minutes):
-        r = step_cap(P, s, SOLL, hz, BRAKE, TARGET, ref)
-        sensor = max(r.output, ref)
-        hz = ac.minute(sensor)
+    zero_count_after_settling = 0
+
+    # 180 Minuten Laufzeit simulieren
+    for minute in range(180):
+        res = step(P, s, setpoint=SOLL, hz=hz, target_hz=target_hz)
+        hz = ac.tick(res.published)
         trace.append(hz)
-    return trace
+        if minute > 45 and hz == 0:
+            zero_count_after_settling += 1
+
+    # Nach dem anfänglichen Einschwingen und Lernen des Limits:
+    assert s.learned_min_hz >= 25.0
+    settled = trace[60:]
+    # Die Anlage schaltet nach dem Lernen nie mehr aus!
+    assert zero_count_after_settling == 0
+    # Die Frequenz bleibt stabil auf oder unmittelbar bei der Mindestmodulation (26 Hz)
+    assert 25.0 <= min(settled) <= 27.0
+    assert max(settled) <= 30.0
 
 
-def test_simulation_cap_stays_near_limit_without_big_swings() -> None:
-    for start in (74.0, 50.0, 40.0):
-        trace = _simulate(240, start_hz=start)
-        settled = trace[60:]  # nach der Einschwingphase
-        assert max(trace) < 80
-        assert max(settled) < 72
-        assert min(settled) > 50  # kein Absacken auf 35 Hz wie zuvor
-        assert sum(settled) / len(settled) > 58  # im Mittel nah an der Grenze (vorher ~46)
+def test_simulation_through_defrost_cycle():
+    """Simulation eines Betriebs mit Abtauung (Defrost).
 
+    Nach dem Abtauen fängt der Regler die Anlage ruhig ab, ohne Überschwinger.
+    """
+    ac = RealisticAcModel(start_hz=40.0, min_hz=25.0)
+    s = State()
+    target_hz = 35.0
 
-def test_simulation_with_longer_dead_time_never_runs_away() -> None:
-    ac, s = FakeAc(74.0, delay_min=4), CapState()
-    hz = 74.0
-    peaks = []
-    for _ in range(240):
-        r = step_cap(P, s, SOLL, hz, BRAKE, TARGET, 20.3)
-        hz = ac.minute(max(r.output, 20.3))
-        peaks.append(hz)
-    assert max(peaks) < 82
+    hz = ac.hz
+    for minute in range(120):
+        # Minute 30 bis 35: Defrost aktiv
+        is_defrost = 30 <= minute <= 35
+        res = step(P, s, setpoint=SOLL, hz=hz, target_hz=target_hz, defrost=is_defrost)
+        hz = ac.tick(res.published, defrost=is_defrost)
+
+    # Nach Minute 60 soll die Anlage wieder sauber auf Ziel 35 Hz eingependelt sein
+    assert abs(hz - 35.0) <= 2.5

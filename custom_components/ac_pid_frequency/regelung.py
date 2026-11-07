@@ -1,16 +1,25 @@
-"""Intelligenter Regelkern: Kompressor-Frequenz über vorgetäuschten Raumsensor einpendeln.
+"""Intelligenter, selbstlernender Regelkern für AC PID Frequency.
 
 Reine Logik ohne Home-Assistant-Abhängigkeit, vollständig testbar.
 
 Besonderheiten dieses Algorithmus:
-* Totzeit-Entkopplung (Patience-Timer): Respektiert die Ansprechzeit der Klimaanlage (z. B. 120 s).
-  Solange die Frequenz bereits in die gewünschte Richtung dreht, wird nicht vorzeitig nachgelegt.
-* 2D-Arbeitspunkt-Lernen: Lernt für verschiedene Außentemperaturzonen (Frost, Übergang, Mild)
-  und Ziel-Frequenzbereiche den passenden Grund-Offset und speichert ihn dauerhaft.
-* Überschwinger-Dämpfung: Schießt die Frequenz über das Ziel hinaus, wird der gelernte
-  Offset für diesen Bereich automatisch verringert.
-* Abtau-Pause (Defrost): Friert Stellgröße und Lernen ein, verhindert Fehlauslösung der Notbremse.
-* Thermischer Überhitzungsschutz: Drosselt die Frequenz, wenn der echte Raum zu warm wird.
+* Adaptive Totzeit & Reaktionszeit: Lernt dynamisch die Ansprechzeit (z. B. 60–180 s)
+  und Verstärkung (Hz/K) der Klimaanlage aus ihren echten Sprungantworten.
+* Momentum-Erkennung (Trend): Bewegt sich die Frequenz bereits mit genügend Dynamik
+  in Richtung Ziel, wird geduldig abgewartet statt vorzeitig nachzulegen.
+* Automatische Mindestmodulations-Erkennung & Abschaltschutz:
+  Liegt die Soll-Hz unterhalb der physikalisch erreichbaren Mindestmodulation (oder droht
+  die Anlage auszugehen), lernt der Algorithmus die Minimalfrequenz und den nötigen
+  Halte-Offset. Die Anlage wird stabil auf der Mindestmodulation gehalten und schaltet
+  nicht mehr aus ("Takten" wird verhindert).
+* Vollständige Defrost- & Erholungsphasen-Behandlung:
+  Während der Abtauung und in einer anschließenden Nach-Abtau-Stabilisierungsphase
+  (120 s) pausieren Regelung und Trendberechnung vollständig.
+* Wetterabhängiges 2D-Arbeitspunkt-Lernen:
+  Lernt für Außentemperaturzonen (Frost, Übergang, Mild) und Frequenzbereiche kontinuierlich
+  den passenden Grund-Offset und speichert ihn dauerhaft.
+* Thermischer Überhitzungsschutz:
+  Drosselt die Frequenz sanft, wenn der reale Raum zu warm wird.
 """
 
 from __future__ import annotations
@@ -22,7 +31,7 @@ from dataclasses import dataclass, field
 
 def round1(value: float) -> float:
     """Kaufmännisch auf 0,1 runden (nicht Banker's rounding)."""
-    return math.floor(value * 10 + 0.5) / 10
+    return math.floor(value * 10.0 + 0.5) / 10.0
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -33,9 +42,9 @@ def _clamp(value: float, low: float, high: float) -> float:
 MODE_RAISE = "raise"        # Frequenz zu niedrig -> Sensor schrittweise kälter
 MODE_LOWER = "lower"        # Frequenz zu hoch -> Sensor wärmer
 MODE_HOLD = "hold"          # Im Totband -> stabil halten & lernen
-MODE_BRAKE = "brake"        # Frequenz-Notbremse aktiv
-MODE_DEFROST = "defrost"    # Abtauung / Vorheizen aktiv -> pausiert
-MODE_OVERHEAT = "overheat"  # Raum überhitzt -> thermische Notbremse aktiv
+MODE_MIN_MOD = "min_mod"    # Ziel unter Mindestmodulation -> stabil auf Minimum halten
+MODE_DEFROST = "defrost"    # Abtauung / Nach-Abtau-Phase -> pausiert
+MODE_OVERHEAT = "overheat"  # Raum überhitzt -> thermischer Schutz aktiv
 
 # Außentemperatur-Bins
 OUTDOOR_BIN_COLD = "cold"      # < 2 °C (Frost / Winter)
@@ -106,29 +115,26 @@ def get_freq_bin(target_hz: float) -> str:
 
 @dataclass(frozen=True)
 class Params:
-    """Regel- und Lernparameter."""
+    """Minimale Regelparameter (auf das Notwendige reduziert)."""
 
     interval_s: float = 60.0          # Regeltakt in Sekunden
-    reaction_time_s: float = 120.0    # Mindest-Beobachtungszeit der Anlage nach einem Schritt
-    deadband_hz: float = 3.0          # Totband um die Ziel-Frequenz (Hz)
-    offset_brake: float = 0.5         # K, Frequenz-Notbremse (Sensor wird wärmer als Soll)
-    max_offset: float = 1.0           # K, Sicherheitsgrenze: Sensor bleibt in Soll ± max_offset
+    max_offset: float = 2.0           # K, Sicherheitsgrenze: Sensor bleibt in Soll ± max_offset
     max_room_overheat: float = 1.0    # K, maximale Raumüberhitzung über Soll vor thermischer Drosselung
+    deadband_hz: float = 2.0          # Hz, Totband um Ziel-Frequenz
     learning_rate: float = 0.15       # Exponentielle Glättung beim Lernen im Totband
-    overshoot_penalty: float = 0.05   # K, Reduktion des gelernten Offsets bei Überschwingern
 
 
 @dataclass
 class State:
-    """Gedächtnis des Reglers (wird über Neustarts gespeichert)."""
+    """Gedächtnis und dynamischer Lernzustand des Reglers (persistent)."""
 
     output: float | None = None
     time_since_last_step: float = 0.0
     stable_cycles: int = 0
-    overshoot_detected: bool = False
     last_target_hz: float | None = None
     hz_prev1: float | None = None
     hz_prev2: float | None = None
+    trend: float = 0.0
     current_outdoor_bin: str = OUTDOOR_BIN_NONE
     current_freq_bin: str = FREQ_BIN_MID_LOW
     current_learned_offset: float = 0.35
@@ -136,23 +142,77 @@ class State:
         default_factory=lambda: copy.deepcopy(DEFAULT_LEARNED_OFFSETS)
     )
 
-    def reset_learning(self) -> None:
-        """Setzt die gelernten Tabellen auf Standardwerte zurück."""
-        self.learned_table = copy.deepcopy(DEFAULT_LEARNED_OFFSETS)
-        self.stable_cycles = 0
-        self.overshoot_detected = False
+    # --- Selbstlernende Anlagendynamik ---
+    learned_min_hz: float = 15.0       # Erlernte Mindestmodulation (Hz)
+    learned_min_offset: float = 0.15   # Erlernter Offset für Mindestmodulation (K)
+    learned_reaction_time: float = 90.0 # Erlernte Reaktionszeit (s)
+    learned_sensitivity: float = 15.0   # Erlernte Verstärkung (Hz je Kelvin)
 
-    def load_learned_table(self, data: dict) -> None:
-        """Lädt eine gespeicherte Lerntabelle sicher."""
-        for obin in OUTDOOR_BINS:
-            if obin in data and isinstance(data[obin], dict):
-                for fbin in FREQ_BINS:
-                    if fbin in data[obin]:
-                        try:
-                            val = float(data[obin][fbin])
-                            self.learned_table[obin][fbin] = round(val, 2)
-                        except (ValueError, TypeError):
-                            pass
+    # Schrittbeobachtung
+    last_step_delta: float = 0.0
+    hz_at_last_step: float | None = None
+
+    # Abtau-Status
+    was_defrosting: bool = False
+    post_defrost_remaining: float = 0.0
+
+    # Beobachtungen vor Abschaltung / Stagnation
+    last_running_hz: float | None = None
+    low_hz_stagnation_count: int = 0
+    effective_target_hz: float = 30.0
+
+    def reset_learning(self) -> None:
+        """Setzt gelernte Tabellen und Anlageneigenschaften auf Werkseinstellungen zurück."""
+        self.learned_table = copy.deepcopy(DEFAULT_LEARNED_OFFSETS)
+        self.learned_min_hz = 15.0
+        self.learned_min_offset = 0.15
+        self.learned_reaction_time = 90.0
+        self.learned_sensitivity = 15.0
+        self.stable_cycles = 0
+        self.last_step_delta = 0.0
+        self.hz_at_last_step = None
+        self.low_hz_stagnation_count = 0
+        self.last_running_hz = None
+
+    def load_learned_data(self, data: dict) -> None:
+        """Lädt gespeicherte Lerndaten sicher."""
+        if not isinstance(data, dict):
+            return
+
+        table = data.get("learned_table")
+        if isinstance(table, dict):
+            for obin in OUTDOOR_BINS:
+                if obin in table and isinstance(table[obin], dict):
+                    for fbin in FREQ_BINS:
+                        if fbin in table[obin]:
+                            try:
+                                val = float(table[obin][fbin])
+                                self.learned_table[obin][fbin] = round(val, 2)
+                            except (ValueError, TypeError):
+                                pass
+
+        for key, attr, low, high in [
+            ("learned_min_hz", "learned_min_hz", 10.0, 60.0),
+            ("learned_min_offset", "learned_min_offset", 0.05, 2.0),
+            ("learned_reaction_time", "learned_reaction_time", 30.0, 300.0),
+            ("learned_sensitivity", "learned_sensitivity", 5.0, 50.0),
+        ]:
+            if key in data:
+                try:
+                    val = float(data[key])
+                    setattr(self, attr, _clamp(val, low, high))
+                except (ValueError, TypeError):
+                    pass
+
+    def export_learned_data(self) -> dict:
+        """Exportiert alle gelernten Kennwerte für die dauerhafte Speicherung."""
+        return {
+            "learned_table": self.learned_table,
+            "learned_min_hz": round(self.learned_min_hz, 1),
+            "learned_min_offset": round(self.learned_min_offset, 2),
+            "learned_reaction_time": round(self.learned_reaction_time, 1),
+            "learned_sensitivity": round(self.learned_sensitivity, 1),
+        }
 
 
 @dataclass(frozen=True)
@@ -163,10 +223,12 @@ class Result:
     published: float         # Gerundet auf 0,1 K für den Home-Assistant-Sensor
     offset: float            # Soll minus Ausgabewert (K, positiv = heizen)
     error_hz: float          # ziel_hz minus ist_hz
-    mode: str                # raise / lower / hold / brake / defrost / overheat
+    mode: str                # raise / lower / hold / min_mod / defrost / overheat
     outdoor_bin: str         # Aktive Außentemperaturzone
     freq_bin: str            # Aktiver Frequenzbereich
     learned_offset: float    # Aktueller Erfahrungswert (K) für diesen Arbeitspunkt
+    effective_target_hz: float  # Tatsächlich angesteuerte Ziel-Frequenz (geclampt an min_hz)
+    learned_min_hz: float    # Aktuell gelernte Mindestmodulation
 
 
 def step(
@@ -175,59 +237,188 @@ def step(
     setpoint: float,
     hz: float,
     target_hz: float,
-    brake_hz: float,
     outdoor_temp: float | None = None,
     room_temp: float | None = None,
     defrost: bool = False,
 ) -> Result:
-    """Führt einen Regelschritt aus."""
+    """Führt einen intelligenten, selbstlernenden Regelschritt aus."""
     s.time_since_last_step += p.interval_s
-    ziel = min(target_hz, brake_hz)
-    err = ziel - hz
 
     outdoor_bin = get_outdoor_bin(outdoor_temp)
-    freq_bin = get_freq_bin(ziel)
     s.current_outdoor_bin = outdoor_bin
+
+    low = setpoint - p.max_offset
+    high = setpoint + p.max_offset
+
+    # ==================================================================
+    # 1. ABTAUUNG & POST-DEFROST STABILISIERUNG
+    # ==================================================================
+    if defrost:
+        s.was_defrosting = True
+        s.time_since_last_step = 0.0
+        s.stable_cycles = 0
+        s.hz_prev1 = s.hz_prev2 = None
+        s.trend = 0.0
+        s.last_step_delta = 0.0
+        v_out = s.output if s.output is not None else setpoint
+        v_out = _clamp(v_out, low, high)
+        freq_bin = get_freq_bin(target_hz)
+        s.current_freq_bin = freq_bin
+        learned_offset = s.learned_table[outdoor_bin][freq_bin]
+        s.current_learned_offset = learned_offset
+        return Result(
+            output=v_out,
+            published=round1(v_out),
+            offset=round(setpoint - v_out, 2),
+            error_hz=round(target_hz - hz, 1),
+            mode=MODE_DEFROST,
+            outdoor_bin=outdoor_bin,
+            freq_bin=freq_bin,
+            learned_offset=learned_offset,
+            effective_target_hz=target_hz,
+            learned_min_hz=s.learned_min_hz,
+        )
+
+    if s.was_defrosting:
+        # Abtauung gerade beendet -> 120s Schonzeit für Druckausgleich und Anlauf
+        s.was_defrosting = False
+        s.post_defrost_remaining = 120.0
+        s.time_since_last_step = 0.0
+        s.hz_prev1 = s.hz_prev2 = None
+        s.trend = 0.0
+
+    if s.post_defrost_remaining > 0:
+        s.post_defrost_remaining = max(0.0, s.post_defrost_remaining - p.interval_s)
+        s.time_since_last_step = 0.0
+        s.stable_cycles = 0
+        v_out = s.output if s.output is not None else setpoint
+        v_out = _clamp(v_out, low, high)
+        freq_bin = get_freq_bin(target_hz)
+        s.current_freq_bin = freq_bin
+        learned_offset = s.learned_table[outdoor_bin][freq_bin]
+        return Result(
+            output=v_out,
+            published=round1(v_out),
+            offset=round(setpoint - v_out, 2),
+            error_hz=round(target_hz - hz, 1),
+            mode=MODE_DEFROST,
+            outdoor_bin=outdoor_bin,
+            freq_bin=freq_bin,
+            learned_offset=learned_offset,
+            effective_target_hz=target_hz,
+            learned_min_hz=s.learned_min_hz,
+        )
+
+    # ==================================================================
+    # 2. KOMPRESSOR-ABSCHALT-ERKENNUNG & MINDESTMODULATION LERNEN
+    # ==================================================================
+    compressor_off = hz <= 1.0
+
+    if compressor_off:
+        # Die Anlage ist ausgegangen! War das die Folge eines Ziels unter Mindestmodulation?
+        if (
+            s.last_running_hz is not None
+            and s.last_running_hz > 10.0
+            and s.last_target_hz is not None
+            and s.last_target_hz <= s.last_running_hz
+        ):
+            # Der Kompressor lief zuletzt stabil bei last_running_hz und ging beim Versuch
+            # weiter abzusenken aus. Die Mindestmodulation ist damit exakt identifiziert!
+            s.learned_min_hz = max(s.learned_min_hz, round(s.last_running_hz, 1))
+            # Halte-Offset für Mindestmodulation sichern (etwas kälter als Aus-Punkt)
+            s.learned_min_offset = max(0.15, s.current_learned_offset)
+
+        # Kompressor sofort durch ausreichenden Kälte-Offset wieder anschieben
+        restart_offset = max(0.25, s.learned_min_offset)
+        v_cmd = round1(setpoint - restart_offset)
+        s.output = _clamp(v_cmd, low, high)
+        s.time_since_last_step = 0.0
+        s.stable_cycles = 0
+        s.hz_prev1 = s.hz_prev2 = None
+        s.trend = 0.0
+        s.last_step_delta = 0.0
+        s.last_running_hz = None
+
+        freq_bin = get_freq_bin(target_hz)
+        return Result(
+            output=s.output,
+            published=round1(s.output),
+            offset=round(setpoint - s.output, 2),
+            error_hz=round(target_hz - hz, 1),
+            mode=MODE_RAISE,
+            outdoor_bin=outdoor_bin,
+            freq_bin=freq_bin,
+            learned_offset=s.current_learned_offset,
+            effective_target_hz=max(target_hz, s.learned_min_hz),
+            learned_min_hz=s.learned_min_hz,
+        )
+
+    # Kompressor läuft: aktuellen Wert als letzten laufenden Zustand merken
+    s.last_running_hz = hz
+
+    # ==================================================================
+    # 3. EFFEKTIVE ZIEL-FREQUENZ (MINDESTMODULATIONS-SCHUTZ)
+    # ==================================================================
+    # Wenn target_hz unterhalb der erlernten Mindestmodulation liegt, kappen wir
+    # das Ziel auf die Mindestmodulation, damit die Anlage NIE MEHR ausgeht!
+    target_below_min = target_hz < s.learned_min_hz
+    effective_target = max(s.learned_min_hz, target_hz)
+    s.effective_target_hz = effective_target
+
+    freq_bin = get_freq_bin(effective_target)
     s.current_freq_bin = freq_bin
 
     learned_offset = s.learned_table[outdoor_bin][freq_bin]
     s.current_learned_offset = learned_offset
 
-    # Zielwert-Änderung erkennen -> sofortige Reaktion erlauben
-    if s.last_target_hz is not None and abs(ziel - s.last_target_hz) > 1.0:
+    # Zielwert-Änderung erkennen -> sofortige Reaktionszeit erlauben
+    if s.last_target_hz is not None and abs(effective_target - s.last_target_hz) > 1.0:
         s.stable_cycles = 0
-        s.overshoot_detected = False
-        s.time_since_last_step = p.reaction_time_s
-    s.last_target_hz = ziel
+        s.low_hz_stagnation_count = 0
+        s.time_since_last_step = s.learned_reaction_time
+    s.last_target_hz = effective_target
 
-    # Frequenz-Verlauf & Trend (Hz-Änderung pro Takt)
+    # ==================================================================
+    # 4. TREND-BERECHNUNG & DYNAMISCHES LERNEN DER ANSPRECHZEIT
+    # ==================================================================
     hz_v1 = s.hz_prev1 if s.hz_prev1 is not None else hz
-    trend = hz - hz_v1
+    delta_hz_raw = hz - hz_v1
+    time_factor = 60.0 / max(5.0, p.interval_s)
+    trend_raw = delta_hz_raw * time_factor  # Hz je Minute
 
-    low, high = setpoint - p.max_offset, setpoint + p.max_offset
+    # Glättung des Trends
+    s.trend = 0.6 * s.trend + 0.4 * trend_raw
 
-    # ------------------------------------------------------------------ 1. ABTAUUNG
-    if defrost:
-        v_out = s.output if s.output is not None else setpoint
-        v_out = _clamp(v_out, low, high)
-        s.hz_prev2 = hz_v1
-        s.hz_prev1 = hz
-        s.stable_cycles = 0
-        s.overshoot_detected = False
-        return Result(
-            output=v_out,
-            published=round1(v_out),
-            offset=round(setpoint - v_out, 2),
-            error_hz=round(err, 1),
-            mode=MODE_DEFROST,
-            outdoor_bin=outdoor_bin,
-            freq_bin=freq_bin,
-            learned_offset=learned_offset,
-        )
+    # Dynamisches Lernen der Reaktionszeit und Verstärkung aus der letzten Stufe
+    if s.last_step_delta != 0.0 and s.hz_at_last_step is not None:
+        # Hat sich die Frequenz nach dem Schritt beruhigt (Plateau erreicht)?
+        if (abs(trend_raw) <= 1.0 or abs(s.trend) < 1.0) and s.time_since_last_step >= 30.0:
+            observed_hz_change = hz - s.hz_at_last_step
+            # Wenn die Frequenz in die erwartete Richtung reagiert hat:
+            if (s.last_step_delta < 0 and observed_hz_change > 0.8) or (
+                s.last_step_delta > 0 and observed_hz_change < -0.8
+            ):
+                # Reaktionszeit aktualisieren
+                s.learned_reaction_time = round(
+                    0.8 * s.learned_reaction_time + 0.2 * s.time_since_last_step, 1
+                )
+                s.learned_reaction_time = _clamp(s.learned_reaction_time, 35.0, 240.0)
 
-    # ------------------------------------------------------------------ 2. RAUM-ÜBERHITZUNGSSCHUTZ
+                # Verstärkung (Hz/K) aktualisieren
+                gain = abs(observed_hz_change) / max(0.05, abs(s.last_step_delta))
+                s.learned_sensitivity = round(
+                    0.85 * s.learned_sensitivity + 0.15 * gain, 1
+                )
+                s.learned_sensitivity = _clamp(s.learned_sensitivity, 6.0, 45.0)
+
+            s.last_step_delta = 0.0
+            s.hz_at_last_step = None
+
+    # ==================================================================
+    # 5. THERMISCHER RAUM-ÜBERHITZUNGSSCHUTZ
+    # ==================================================================
     if room_temp is not None and room_temp >= (setpoint + p.max_room_overheat):
-        v_out = _clamp(setpoint + 0.4, low, high)
+        v_out = _clamp(setpoint + 0.3, low, high)
         s.output = v_out
         s.time_since_last_step = 0.0
         s.stable_cycles = 0
@@ -237,101 +428,128 @@ def step(
             output=v_out,
             published=round1(v_out),
             offset=round(setpoint - v_out, 2),
-            error_hz=round(err, 1),
+            error_hz=round(effective_target - hz, 1),
             mode=MODE_OVERHEAT,
             outdoor_bin=outdoor_bin,
             freq_bin=freq_bin,
             learned_offset=learned_offset,
+            effective_target_hz=effective_target,
+            learned_min_hz=s.learned_min_hz,
         )
 
-    # ------------------------------------------------------------------ 3. NOTBREMSE KOMPRESSOR
-    if hz > brake_hz:
-        v_out = _clamp(setpoint + p.offset_brake, low, high)
-        s.output = v_out
-        s.time_since_last_step = 0.0
-        s.stable_cycles = 0
-        if not s.overshoot_detected:
-            s.overshoot_detected = True
-            new_learned = max(0.05, learned_offset - p.overshoot_penalty)
-            s.learned_table[outdoor_bin][freq_bin] = round(new_learned, 2)
-            s.current_learned_offset = round(new_learned, 2)
-        s.hz_prev2 = hz_v1
-        s.hz_prev1 = hz
-        return Result(
-            output=v_out,
-            published=round1(v_out),
-            offset=round(setpoint - v_out, 2),
-            error_hz=round(err, 1),
-            mode=MODE_BRAKE,
-            outdoor_bin=outdoor_bin,
-            freq_bin=freq_bin,
-            learned_offset=s.current_learned_offset,
-        )
-
-    # ------------------------------------------------------------------ 4. NORMALE REGELUNG
-    # Wenn noch kein Wert vorhanden ist, starten wir sanft beim gelernten Arbeitspunkt
+    # ==================================================================
+    # 6. BASIS-AUSGANGSWERT INITIALISIEREN
+    # ==================================================================
     if s.output is None:
-        v_alt = _clamp(round1(setpoint - learned_offset), low, high)
+        init_offset = learned_offset
+        if target_below_min:
+            init_offset = max(init_offset, s.learned_min_offset)
+        v_alt = _clamp(round1(setpoint - init_offset), low, high)
         s.output = v_alt
         s.time_since_last_step = 0.0
     else:
         v_alt = _clamp(s.output, low, high)
 
     current_offset = round(setpoint - v_alt, 2)
+    err = effective_target - hz
 
+    # ==================================================================
+    # 7. ERKENNUNG VON MINDESTMODULATIONS-STAGNATION
+    # ==================================================================
+    # Wenn die Frequenz trotz kleinem Offset / wärmerem Sensor nicht weiter sinkt,
+    # haben wir die physikalische Mindestmodulation der Anlage im aktuellen Betriebspunkt erreicht.
+    if err < -p.deadband_hz and current_offset <= 0.1 and abs(s.trend) < 0.5:
+        s.low_hz_stagnation_count += 1
+        if s.low_hz_stagnation_count >= 3:
+            # 3 Takte keine Abnahme -> das ist die tatsächliche Mindestmodulation!
+            s.learned_min_hz = max(s.learned_min_hz, round(hz, 1))
+            s.learned_min_offset = max(0.1, current_offset)
+            effective_target = s.learned_min_hz
+            err = effective_target - hz
+            s.low_hz_stagnation_count = 0
+    else:
+        s.low_hz_stagnation_count = 0
+
+    # ==================================================================
+    # 8. REGELSCHRITT-ENTSCHEIDUNG
+    # ==================================================================
     # Fall A: Im Totband (Ziel erreicht)
     if abs(err) <= p.deadband_hz:
-        mode = MODE_HOLD
+        mode = MODE_MIN_MOD if target_below_min else MODE_HOLD
         v_cmd = v_alt
         s.stable_cycles += 1
-        s.overshoot_detected = False
 
         # Wenn die Frequenz mindestens 2 Takte im Totband stabil ist:
-        # Erfahrungswert für diesen Arbeitspunkt mit exponentieller Glättung aktualisieren
-        if s.stable_cycles >= 2 and current_offset > 0:
+        if s.stable_cycles >= 2:
             new_learned = (1.0 - p.learning_rate) * learned_offset + p.learning_rate * current_offset
-            new_learned = round(_clamp(new_learned, 0.05, p.max_offset), 2)
+            new_learned = round(_clamp(new_learned, -0.2, p.max_offset), 2)
             s.learned_table[outdoor_bin][freq_bin] = new_learned
             s.current_learned_offset = new_learned
+            if target_below_min or abs(hz - s.learned_min_hz) <= p.deadband_hz:
+                s.learned_min_offset = round(
+                    0.8 * s.learned_min_offset + 0.2 * max(0.05, current_offset), 2
+                )
 
-    # Fall B: Zu viel Frequenz (err < -deadband)
+    # Fall B: Frequenz zu hoch (err < -deadband)
     elif err < -p.deadband_hz:
         mode = MODE_LOWER
         s.stable_cycles = 0
 
-        # Überschwinger erkennen (mind. 2 Hz über Totband hinaus geschossen)
-        if err < -(p.deadband_hz + 2.0) and not s.overshoot_detected:
-            s.overshoot_detected = True
-            new_learned = max(0.05, learned_offset - p.overshoot_penalty)
-            s.learned_table[outdoor_bin][freq_bin] = round(new_learned, 2)
-            s.current_learned_offset = round(new_learned, 2)
-
-        # Fällt die Frequenz bereits zügig ab, halten wir still
-        if trend < -2.0:
+        # Wenn die Frequenz bereits dynamisch nach unten fällt: STILLHALTEN!
+        if s.trend < -1.0:
             v_cmd = v_alt
-        elif s.time_since_last_step >= (p.reaction_time_s / 2.0):
-            # Schrittweise wärmer stellen (Sensor anheben)
-            v_cmd = round1(v_alt + 0.1)
-            s.time_since_last_step = 0.0
+        elif s.time_since_last_step >= (s.learned_reaction_time * 0.75):
+            # Schrittgröße anpassen: bei großer Abweichung dynamisch größer, sonst 0,1 K
+            step_k = 0.1
+            if abs(err) >= 10.0 and s.learned_sensitivity > 0:
+                step_k = min(0.3, max(0.1, round1(abs(err) / s.learned_sensitivity * 0.5)))
+
+            # Wenn wir uns der Mindestmodulation nähern, nie wärmer als der Haltepunkt stellen,
+            # damit die Anlage keinesfalls ausschaltet!
+            cand_cmd = round1(v_alt + step_k)
+            max_allowed_temp = setpoint - max(0.0, s.learned_min_offset - 0.1)
+            if target_below_min and cand_cmd > max_allowed_temp:
+                v_cmd = round1(max_allowed_temp)
+                mode = MODE_MIN_MOD
+            else:
+                v_cmd = cand_cmd
+
+            if round1(v_cmd) != round1(v_alt):
+                s.last_step_delta = round(v_cmd - v_alt, 2)
+                s.hz_at_last_step = hz
+                s.time_since_last_step = 0.0
         else:
             v_cmd = v_alt
 
-    # Fall C: Zu wenig Frequenz (err > deadband)
+    # Fall C: Frequenz zu niedrig (err > deadband)
     else:
         mode = MODE_RAISE
         s.stable_cycles = 0
 
-        # Wenn der Kompressor bereits aktiv nach oben beschleunigt (Trend positiv):
-        # Geduldig abwarten und nicht vorzeitig nachlegen!
-        if trend >= 1.5:
+        # Wenn der Kompressor bereits nach oben beschleunigt: STILLHALTEN!
+        if s.trend > 1.0:
             v_cmd = v_alt
-        elif s.time_since_last_step >= p.reaction_time_s:
-            # Reaktionszeit verstrichen und Frequenz stagniert noch unter Ziel:
-            # Behutsamen Schritt um 0,1 K nach unten (kälter) machen
-            v_cmd = round1(v_alt - 0.1)
-            s.time_since_last_step = 0.0
+        elif s.time_since_last_step >= s.learned_reaction_time:
+            step_k = 0.1
+            if abs(err) >= 10.0 and s.learned_sensitivity > 0:
+                step_k = min(0.3, max(0.1, round1(abs(err) / s.learned_sensitivity * 0.5)))
+
+            v_cmd = round1(v_alt - step_k)
+            if round1(v_cmd) != round1(v_alt):
+                s.last_step_delta = round(v_cmd - v_alt, 2)
+                s.hz_at_last_step = hz
+                s.time_since_last_step = 0.0
         else:
             v_cmd = v_alt
+
+    # ==================================================================
+    # 9. ABSCHLUSS & SPEICHERUNG
+    # ==================================================================
+    # Schutz vor Ausgehen: Wenn Ziel unter Mindestmodulation liegt, darf der Sensor
+    # niemals so warm werden, dass die Anlage abschaltet (mindestens minimaler Heizbedarf)
+    if target_below_min and hz <= (s.learned_min_hz + p.deadband_hz):
+        safe_max_temp = setpoint - max(0.0, s.learned_min_offset - 0.1)
+        v_cmd = min(v_cmd, safe_max_temp)
 
     v_cmd = _clamp(v_cmd, low, high)
     s.output = v_cmd
@@ -342,100 +560,11 @@ def step(
         output=v_cmd,
         published=round1(v_cmd),
         offset=round(setpoint - v_cmd, 2),
-        error_hz=round(err, 1),
+        error_hz=round(effective_target - hz, 1),
         mode=mode,
         outdoor_bin=outdoor_bin,
         freq_bin=freq_bin,
         learned_offset=s.current_learned_offset,
+        effective_target_hz=effective_target,
+        learned_min_hz=s.learned_min_hz,
     )
-
-
-# ======================================================================================
-# Hz-Deckel (Regler aus): eigener, vorausschauender Regler für die Eigenregelung der Anlage
-# ======================================================================================
-# Die Anlage reagiert mit mehreren Minuten Verzögerung und integrierend auf die Abweichung
-# zwischen Soll und Sensor. Der Deckel arbeitet deshalb mit kleinen Schritten, bremst schon
-# bei steigendem Trend vor dem Überschreiten der Notbremse und gibt erst frei, wenn die echte
-# Raumtemperatur nahe genug am Sollwert liegt.
-
-CAP_BRAKE_STEP = 0.3        # K je Takt, solange die Hz über der Notbremse liegen
-CAP_PREBRAKE_STEP = 0.2     # K je Takt, wenn die Hz absehbar die Notbremse überschreiten
-CAP_NEAR_STEP = 0.1         # K je Takt knapp unter der Notbremse (zu hoch) bei steigendem Trend
-CAP_LEAD_TICKS = 2.0        # Vorhersage: Hz in so vielen Takten (Totzeit der Anlage)
-CAP_FAST_BELOW_HZ = 20.0    # Abstand unter dem Ziel, ab dem schneller abgesenkt wird
-CAP_RELEASE_K = 0.3         # Freigabe, wenn echte Raumtemperatur höchstens so viel unter Soll liegt
-
-
-@dataclass
-class CapState:
-    """Gedächtnis des Hz-Deckels (wird nicht gespeichert)."""
-
-    output: float | None = None
-    hz_prev: float | None = None
-    time_since_step: float = 0.0
-
-
-@dataclass(frozen=True)
-class CapResult:
-    output: float       # an die Anlage gesendeter Wert (>= echte Raumtemperatur, 0,1 K)
-    error_hz: float     # Ziel (Notbremse - Reserve) minus Ist
-    release: bool       # True: Deckel kann freigeben, echte Temperatur durchreichen
-
-
-def cap_step(
-    p: Params,
-    cs: CapState,
-    setpoint: float,
-    hz: float,
-    ref: float,
-    brake_hz: float,
-    margin_hz: float,
-) -> CapResult:
-    """Ein Takt des Hz-Deckels.
-
-    ``ref`` ist die Temperatur, die die Anlage ohne Deckel sähe (echter Raumsensor); der
-    gesendete Wert liegt nie darunter.
-    """
-    cs.time_since_step += p.interval_s
-    target = max(10.0, brake_hz - margin_hz)
-    low_edge = target - p.deadband_hz
-    high_edge = target + p.deadband_hz
-
-    if cs.output is None:
-        cs.output = ref  # die Anlage sieht bisher die echte Temperatur
-    trend = hz - cs.hz_prev if cs.hz_prev is not None else 0.0
-    cs.hz_prev = hz
-    predicted = hz + CAP_LEAD_TICKS * trend
-
-    out = cs.output
-    if hz > brake_hz:
-        # Über der Notbremse: in Stufen wärmer, außer die Hz fallen schon zügig
-        if trend > -2.0:
-            out += CAP_BRAKE_STEP
-            cs.time_since_step = 0.0
-    elif predicted >= brake_hz and trend >= 0.5:
-        # Steigt auf die Notbremse zu: vorher gegensteuern
-        out += CAP_PREBRAKE_STEP
-        cs.time_since_step = 0.0
-    elif hz > high_edge:
-        if trend >= 0.0:
-            out += CAP_NEAR_STEP
-            cs.time_since_step = 0.0
-    elif hz < low_edge:
-        # Zu wenig Hz: kälter stellen, aber nicht, solange die Anlage von selbst anzieht
-        if trend < 1.0:
-            wait = 0.0 if hz < target - CAP_FAST_BELOW_HZ else p.reaction_time_s
-            if cs.time_since_step >= wait:
-                out -= 0.1
-                cs.time_since_step = 0.0
-
-    out = min(max(out, setpoint - p.max_offset), setpoint + p.max_offset)
-    out = max(out, ref)  # nie kälter als die echte Temperatur (kein Aufziehen im Leerlauf)
-    cs.output = out
-
-    release = (
-        round1(out) <= round1(ref)
-        and ref >= setpoint - CAP_RELEASE_K
-        and hz <= brake_hz
-    )
-    return CapResult(output=round1(out), error_hz=round(target - hz, 1), release=release)

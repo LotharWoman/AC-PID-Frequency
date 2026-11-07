@@ -16,20 +16,14 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_CAP_MARGIN,
     CONF_CLIMATE,
-    CONF_DEADBAND,
     CONF_DEFROST,
-    CONF_FAULT_TIMEOUT,
     CONF_FREQUENCY,
     CONF_INDOOR_UNITS,
-    CONF_INTERVAL,
     CONF_MAX_OFFSET,
     CONF_MAX_ROOM_OVERHEAT,
     CONF_NAME,
-    CONF_OFFSET_BRAKE,
     CONF_OUTDOOR_TEMP,
-    CONF_REACTION_TIME,
     CONF_ROOM_TEMP,
     DEFAULT_NAME,
     DOMAIN,
@@ -38,16 +32,10 @@ from .const import (
 
 FREQUENCY_DOMAINS = ["sensor", "number", "input_number"]
 
-# (Schlüssel, min, max, Schritt, Einheit) – Reihenfolge = Reihenfolge im Dialog
+# (Schlüssel, min, max, Schritt, Einheit) – auf das absolut notwendige Minimum reduziert
 TUNING_FIELDS: list[tuple[str, float, float, float, str]] = [
-    (CONF_INTERVAL, 10, 300, 5, "s"),
-    (CONF_REACTION_TIME, 30, 600, 10, "s"),
-    (CONF_DEADBAND, 0.5, 10, 0.5, "Hz"),
-    (CONF_MAX_OFFSET, 0.1, 5, 0.1, "K"),
-    (CONF_MAX_ROOM_OVERHEAT, 0.2, 5, 0.1, "K"),
-    (CONF_OFFSET_BRAKE, 0, 3, 0.05, "K"),
-    (CONF_CAP_MARGIN, 1, 30, 1, "Hz"),
-    (CONF_FAULT_TIMEOUT, 1, 120, 1, "min"),
+    (CONF_MAX_OFFSET, 0.5, 5.0, 0.1, "K"),
+    (CONF_MAX_ROOM_OVERHEAT, 0.2, 5.0, 0.1, "K"),
 ]
 
 

@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "AC PID Frequency einrichten",
-        "description": "Der Regler lernt intelligent den passenden Temperatur-Offset, um die Klimaanlage auf deine Ziel-Frequenz einzupendeln. Wähle das Master-Innengerät und die Entität der Kompressor-Frequenz.",
+        "description": "Der Regler lernt selbstständig unter verschiedensten Bedingungen (Abtauen, Reaktionszeiten, Mindestmodulation), die Klimaanlage sicher auf deine Ziel-Frequenz einzupendeln.",
         "data": {
           "name": "Name",
           "climate_entity": "Klimaanlage (Master-Innengerät)",
@@ -17,8 +17,8 @@
           "climate_entity": "Diese Entität wird gelesen (Solltemperatur, Betriebsart) und in der Karte bedient. Ihre Integration muss einen externen Raumsensor unterstützen; den erzeugten Sensor trägst du dort anschließend ein.",
           "frequency_entity": "Entität, die die aktuelle Kompressor-Frequenz als Zahl liefert.",
           "outdoor_temp_entity": "Sensor oder Wetter-Entität für wetterabhängiges Lernen (Frost, Übergang, Mild).",
-          "room_temp_entity": "Echtes Raumthermometer: dient als Überhitzungsschutz und wird 1:1 an die Anlage durchgereicht, solange der Regler aus ist oder die Anlage nicht heizt. Ohne Angabe nutzt die Anlage dann ihren eigenen Innensensor.",
-          "defrost_entity": "Abtau-Erkennung. Während des Abtauens pausiert der Regler Notbremse und Lernen. Fallback: hvac_action der Klimaanlage.",
+          "room_temp_entity": "Echtes Raumthermometer: dient als Überhitzungsschutz und wird 1:1 an die Anlage durchgereicht, solange der Regler aus ist oder die Anlage nicht heizt.",
+          "defrost_entity": "Abtau-Erkennung. Während des Abtauens pausiert der Regler vollständig. Fallback: hvac_action der Klimaanlage.",
           "indoor_units": "Optional. Werden in der Karte klein und ohne Bedienmöglichkeit angezeigt."
         }
       }
@@ -49,34 +49,22 @@
         "data_description": {
           "climate_entity": "Gelesen wird Solltemperatur und Betriebsart dieser Entität.",
           "frequency_entity": "Entität, die die aktuelle Kompressor-Frequenz als Zahl liefert.",
-          "outdoor_temp_entity": "Für wetterabhängiges 2D-Arbeitspunktlernen.",
-          "room_temp_entity": "Echtes Raumthermometer: Überhitzungsschutz und Durchreichen bei ausgeschaltetem Regler bzw. ohne Heizbetrieb.",
-          "defrost_entity": "Pausiert Regelung und Notbremse während des Abtauens.",
+          "outdoor_temp_entity": "Für wetterabhängiges Lernen.",
+          "room_temp_entity": "Echtes Raumthermometer: Überhitzungsschutz und Durchreichen bei ausgeschaltetem Regler.",
+          "defrost_entity": "Pausiert Regelung während des Abtauens.",
           "indoor_units": "Optional. Nur Anzeige in der Karte."
         }
       },
       "tuning": {
-        "title": "Regel- und Lernparameter",
-        "description": "Passe Totzeiten, Grenzwerte und Überhitzungsschutz an deine Anlage an.",
+        "title": "Regelparameter",
+        "description": "Reaktionszeiten und Mindestmodulation werden vom Algorithmus selbst gelernt. Hier kannst du nur noch Sicherheitsgrenzen festlegen.",
         "data": {
-          "interval_s": "Regeltakt",
-          "reaction_time_s": "Anlagen-Reaktionszeit (Totzeit-Filter)",
-          "deadband_hz": "Totband",
           "max_offset": "Max. Offset zur Solltemperatur",
-          "max_room_overheat": "Max. Raumüberhitzung",
-          "offset_brake": "Offset bei Notbremse",
-          "cap_margin_hz": "Hz-Deckel: Abstand unter der Notbremse",
-          "fault_timeout_min": "Fehler-Wartezeit"
+          "max_room_overheat": "Max. Raumüberhitzung"
         },
         "data_description": {
-          "interval_s": "Sekunden zwischen zwei Berechnungstakten des Controllers.",
-          "reaction_time_s": "Mindestwartezeit (z. B. 120 s) nach einem Schritt, um der trägen Anlage Zeit zur Reaktion zu geben.",
-          "deadband_hz": "Abweichung um das Ziel (Hz), in der der Zustand gehalten und gelernt wird.",
           "max_offset": "Maximaler Offset in Kelvin relativ zur Solltemperatur.",
-          "max_room_overheat": "Steigt der echte Raum um mehr als diesen Wert über Soll, wird thermisch gedrosselt.",
-          "offset_brake": "Um so viel wird der Sensor wärmer gestellt, wenn die Frequenz die Notbremse überschreitet.",
-          "cap_margin_hz": "Bei ausgeschaltetem Regler begrenzt der Hz-Deckel die Anlage auf Notbremse minus diesen Wert (Hz).",
-          "fault_timeout_min": "Fehlen Eingangsdaten länger als diese Zeit, wird der Sensor nicht verfügbar."
+          "max_room_overheat": "Steigt der echte Raum um mehr als diesen Wert über Soll, wird thermisch gedrosselt."
         }
       }
     }
@@ -93,11 +81,10 @@
           "idle": "Wartet (kein Heizbetrieb)",
           "raise": "Frequenz erhöhen",
           "lower": "Frequenz senken",
-          "hold": "Im Zielbereich (lernend)",
-          "brake": "Notbremse",
+          "hold": "Im Zielbereich (stabil)",
+          "min_mod": "Mindestmodulation (stabil gehalten)",
           "defrost": "Abtauen aktiv (pausiert)",
           "overheat": "Überhitzungsschutz aktiv",
-          "cap": "Hz-Deckel aktiv (Regler aus)",
           "waiting": "Daten fehlen (Wert gehalten)",
           "fault": "Fehler (Sensor nicht verfügbar)"
         }
@@ -110,22 +97,19 @@
       },
       "frequency_error": {
         "name": "Frequenzabweichung"
+      },
+      "learned_min_hz": {
+        "name": "Erreichte Mindestmodulation"
       }
     },
     "number": {
       "target_hz": {
         "name": "Ziel-Frequenz"
-      },
-      "brake_hz": {
-        "name": "Notbremse-Frequenz"
       }
     },
     "switch": {
       "enabled": {
         "name": "Hz-Regelung"
-      },
-      "cap_enabled": {
-        "name": "Hz-Deckel"
       }
     },
     "button": {

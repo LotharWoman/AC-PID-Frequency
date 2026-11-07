@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Set up AC PID Frequency",
-        "description": "The controller intelligently learns the matching temperature offset to steer the air conditioner to your target frequency. Pick the master indoor unit and compressor frequency entity.",
+        "description": "The controller self-learns under all operating conditions (defrost, reaction times, minimum modulation) to reliably guide the AC to your target frequency.",
         "data": {
           "name": "Name",
           "climate_entity": "Air conditioner (master indoor unit)",
@@ -17,8 +17,8 @@
           "climate_entity": "This entity is read (target temperature, mode) and operated in the card. Its integration must support an external room sensor; enter the generated sensor there afterwards.",
           "frequency_entity": "Entity that reports the current compressor frequency as a number.",
           "outdoor_temp_entity": "Sensor or weather entity for weather-aware learning (cold, moderate, mild).",
-          "room_temp_entity": "Real room thermometer: used for overheat protection and passed 1:1 to the AC while the controller is off or the AC is not heating. Without it the AC falls back to its own indoor sensor.",
-          "defrost_entity": "Defrost detection. During defrosting the controller pauses the emergency brake and learning. Fallback: hvac_action of the climate entity.",
+          "room_temp_entity": "Real room thermometer: used for overheat protection and passed 1:1 to the AC while the controller is off or not heating.",
+          "defrost_entity": "Defrost detection. During defrosting the controller pauses completely. Fallback: hvac_action of the climate entity.",
           "indoor_units": "Optional. Shown small and read-only in the card."
         }
       }
@@ -49,34 +49,22 @@
         "data_description": {
           "climate_entity": "Target temperature and mode are read from this entity.",
           "frequency_entity": "Entity that reports the current compressor frequency as a number.",
-          "outdoor_temp_entity": "For weather-dependent 2D operating point learning.",
+          "outdoor_temp_entity": "For weather-dependent learning.",
           "room_temp_entity": "Real room thermometer: overheat protection and pass-through while the controller is off or not heating.",
-          "defrost_entity": "Pauses regulation and emergency brake during defrost cycles.",
+          "defrost_entity": "Pauses regulation during defrost cycles.",
           "indoor_units": "Optional. Display only in the card."
         }
       },
       "tuning": {
-        "title": "Control and learning parameters",
-        "description": "Adjust dead times, safety limits and overheat protection.",
+        "title": "Control parameters",
+        "description": "Reaction times and minimum modulation are learned automatically. Set safety limits here.",
         "data": {
-          "interval_s": "Control interval",
-          "reaction_time_s": "AC reaction time (dead-time filter)",
-          "deadband_hz": "Dead band",
           "max_offset": "Max offset to target temperature",
-          "max_room_overheat": "Max room overheating",
-          "offset_brake": "Offset on emergency brake",
-          "cap_margin_hz": "Frequency cap: margin below emergency brake",
-          "fault_timeout_min": "Fault timeout"
+          "max_room_overheat": "Max room overheating"
         },
         "data_description": {
-          "interval_s": "Seconds between two controller calculation steps.",
-          "reaction_time_s": "Minimum observation time (e.g. 120 s) after a step to give the sluggish AC time to react.",
-          "deadband_hz": "Dead band around target (Hz) in which the state is held and learned.",
           "max_offset": "Maximum offset in Kelvin relative to target temperature.",
-          "max_room_overheat": "If the real room exceeds target by more than this value, thermal throttling activates.",
-          "offset_brake": "Offset added when frequency exceeds emergency brake.",
-          "cap_margin_hz": "With the controller off, the frequency cap limits the AC to emergency brake minus this value (Hz).",
-          "fault_timeout_min": "If input data is missing longer than this time, the sensor becomes unavailable."
+          "max_room_overheat": "If the real room exceeds target by more than this value, thermal throttling activates."
         }
       }
     }
@@ -93,11 +81,10 @@
           "idle": "Waiting (not heating)",
           "raise": "Raising frequency",
           "lower": "Lowering frequency",
-          "hold": "On target (learning)",
-          "brake": "Emergency brake",
+          "hold": "On target (stable)",
+          "min_mod": "Minimum modulation (stabilized)",
           "defrost": "Defrost active (paused)",
           "overheat": "Overheat protection active",
-          "cap": "Frequency cap active (controller off)",
           "waiting": "Data missing (value held)",
           "fault": "Fault (sensor unavailable)"
         }
@@ -110,22 +97,19 @@
       },
       "frequency_error": {
         "name": "Frequency error"
+      },
+      "learned_min_hz": {
+        "name": "Achieved minimum modulation"
       }
     },
     "number": {
       "target_hz": {
         "name": "Target frequency"
-      },
-      "brake_hz": {
-        "name": "Emergency-brake frequency"
       }
     },
     "switch": {
       "enabled": {
         "name": "Frequency control"
-      },
-      "cap_enabled": {
-        "name": "Frequency cap"
       }
     },
     "button": {

@@ -1,7 +1,7 @@
 # Markdown-Karte für AC PID Frequency
 # Einzige Anpassung: die Entität des Status-Sensors in der ersten Zeile des Templates
 # (Einstellungen → Geräte & Dienste → AC PID Frequency → Gerät → Diagnose → "Status").
-# Alle anderen Entitäten (Hz, Ziel, Notbremse, Raum, Außen, Sendetemperatur ...) liest das
+# Alle anderen Entitäten (Hz, Ziel, Raum, Außen, Sendetemperatur ...) liest das
 # Template selbst aus den Attributen dieses Sensors.
 type: markdown
 content: |-
@@ -11,7 +11,6 @@ content: |-
   {% set pt = state_attr(st, 'passthrough') -%}
   {% set e_hz = state_attr(st, 'frequency_entity') -%}
   {% set e_tgt = state_attr(st, 'target_hz_entity') -%}
-  {% set e_brk = state_attr(st, 'brake_hz_entity') -%}
   {% set e_room = state_attr(st, 'room_temperature_entity') -%}
   {% set e_out = state_attr(st, 'outdoor_temperature_entity') -%}
   {% set e_sim = state_attr(st, 'temperature_entity') -%}
@@ -19,7 +18,7 @@ content: |-
   {% set soll = (state_attr(clim, 'temperature') | float(none)) if clim else none -%}
   {% set hz = (states(e_hz) | float(none)) if e_hz else none -%}
   {% set ziel = (states(e_tgt) | float(none)) if e_tgt else none -%}
-  {% set brems = (states(e_brk) | float(none)) if e_brk else none -%}
+  {% set min_hz = state_attr(st, 'learned_min_hz') -%}
   {% set raum = (states(e_room) | float(none)) if e_room else none -%}
   {% set aussen = (state_attr(e_out, 'temperature') | float(none) if e_out.startswith('weather.') else states(e_out) | float(none)) if e_out else none -%}
   {% set sim = (states(e_sim) | float(none)) if e_sim else none -%}
@@ -31,13 +30,12 @@ content: |-
     'off': ('Durchgereicht' if pt else 'Aus'),
     'idle': ('Durchgereicht' if pt else 'Pausiert'),
     'raise': 'Fallen (Anlage anschieben)',
-    'lower': 'Steigen (Frequenz bremsen)',
-    'hold': 'Halten',
-    'brake': 'Steigen (Notbremse)',
+    'lower': 'Steigen (Frequenz senken)',
+    'hold': 'Halten (stabil)',
+    'min_mod': 'Mindestmodulation (stabil gehalten)',
     'defrost': 'Eingefroren (Abtauen)',
     'overheat': 'Steigen (Überhitzung)',
     'waiting': 'Halten (Daten fehlen)',
-    'cap': 'Steigen (Hz-Deckel)',
     'fault': 'Nicht verfügbar'} -%}
   {% set titel = {
     'off': '⏸ Regler AUS',
@@ -45,11 +43,10 @@ content: |-
     'raise': '🔼 Frequenz zu niedrig',
     'lower': '🔽 Frequenz zu hoch',
     'hold': '✅ Im Zielbereich',
-    'brake': '🛑 Notbremse aktiv',
+    'min_mod': '⚓ Mindestmodulation erreicht',
     'defrost': '❄ Abtauen',
     'overheat': '🌡 Raum zu warm',
     'waiting': '⏳ Daten fehlen',
-    'cap': '🧢 Hz-Deckel aktiv',
     'fault': '⚠ Fehler'} -%}
   {% set text = {
     'off': 'Die Sendetemperatur wird nicht geregelt.',
@@ -57,11 +54,10 @@ content: |-
     'raise': 'Die Sendetemperatur wird schrittweise gesenkt, bis die Anlage hochfährt.',
     'lower': 'Die Sendetemperatur wird angehoben, bis die Frequenz sinkt.',
     'hold': 'Die Sendetemperatur wird gehalten, der Erfahrungswert wird gelernt.',
-    'brake': 'Die Frequenz liegt über der Notbremse, die Sendetemperatur wird angehoben.',
+    'min_mod': 'Ziel liegt unterhalb der Mindestmodulation: Anlage wird stabil auf Minimum gehalten und schaltet nicht aus.',
     'defrost': 'Regelung und Lernen pausieren während des Abtauens.',
     'overheat': 'Der Überhitzungsschutz drosselt die Frequenz.',
     'waiting': 'Eingangsdaten fehlen, der letzte Wert wird gehalten.',
-    'cap': 'Regler aus: Der Hz-Deckel hält die Anlage unter der Notbremse.',
     'fault': 'Eingangsdaten fehlen zu lange, die Anlage nutzt ihren eigenen Sensor.'} -%}
   {% if status in ['unavailable', 'unknown'] or not clim -%}
   ### ⚠ AC PID Frequency nicht verfügbar
@@ -80,7 +76,9 @@ content: |-
   {% if hz is number and ziel is number -%}
   | Abweichung | {{ '%+.1f' | format(hz - ziel) }} Hz |
   {% endif -%}
-  | Notbremse ab | {{ (brems | round(0) | int ~ ' Hz') if brems is number else '–' }} |
+  {% if min_hz is number and min_hz > 12 -%}
+  | Mindestmodulation | {{ (min_hz | round(1) ~ ' Hz') }} |
+  {% endif -%}
 
   | Temperatur | |
   |:--|--:|

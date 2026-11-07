@@ -40,6 +40,7 @@ async def async_setup_entry(
             OffsetSensor(controller),
             FactorSensor(controller),
             ErrorSensor(controller),
+            MinHzSensor(controller),
         ]
     )
 
@@ -99,20 +100,22 @@ class StatusSensor(AcPidFrequencyEntity, SensorEntity):
             "outdoor_temperature_entity": cfg.get(CONF_OUTDOOR_TEMP),
             "room_temperature_entity": cfg.get(CONF_ROOM_TEMP),
             "defrost_entity": cfg.get(CONF_DEFROST),
-            "cap_active": self.controller.cap_active,
             "passthrough": self.controller.passthrough,
             "indoor_units": list(cfg.get(CONF_INDOOR_UNITS) or []),
             "active_outdoor_bin": self.controller.regelung.current_outdoor_bin,
             "active_freq_bin": self.controller.regelung.current_freq_bin,
             "learned_offset": self.controller.regelung.current_learned_offset,
+            "learned_min_hz": self.controller.regelung.learned_min_hz,
+            "learned_reaction_time": self.controller.regelung.learned_reaction_time,
+            "learned_sensitivity": self.controller.regelung.learned_sensitivity,
+            "effective_target_hz": self.controller.regelung.effective_target_hz,
             "temperature_entity": lookup("sensor", "temperature"),
             "offset_entity": lookup("sensor", "offset"),
             "factor_entity": lookup("sensor", "learning_factor"),
             "error_entity": lookup("sensor", "frequency_error"),
+            "min_hz_entity": lookup("sensor", "learned_min_hz"),
             "target_hz_entity": lookup("number", "target_hz"),
-            "brake_hz_entity": lookup("number", "brake_hz"),
             "switch_entity": lookup("switch", "enabled"),
-            "cap_switch_entity": lookup("switch", "cap_enabled"),
         }
 
 
@@ -163,3 +166,21 @@ class ErrorSensor(AcPidFrequencyEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         return self.controller.error_hz
+
+
+class MinHzSensor(AcPidFrequencyEntity, SensorEntity):
+    """Erreichte bzw. erlernte Mindestmodulation des Kompressors (Hz)."""
+
+    _attr_device_class = SensorDeviceClass.FREQUENCY
+    _attr_native_unit_of_measurement = UnitOfFrequency.HERTZ
+    _attr_suggested_display_precision = 1
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:arrow-collapse-down"
+
+    def __init__(self, controller: AcPidFrequencyController) -> None:
+        super().__init__(controller, "learned_min_hz")
+
+    @property
+    def native_value(self) -> float:
+        return self.controller.regelung.learned_min_hz

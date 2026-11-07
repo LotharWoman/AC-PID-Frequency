@@ -16,11 +16,11 @@ from .entity import AcPidFrequencyEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([EnabledSwitch(entry.runtime_data), CapSwitch(entry.runtime_data)])
+    async_add_entities([EnabledSwitch(entry.runtime_data)])
 
 
 class EnabledSwitch(AcPidFrequencyEntity, SwitchEntity):
-    """Aus: Fake-Sensor ist unavailable, die Anlage regelt mit ihrem eigenen Sensor."""
+    """Aus: Vorgetäuschter Sensor reicht echte Raumtemperatur durch (oder unavailable)."""
 
     _attr_icon = "mdi:thermostat-auto"
 
@@ -36,22 +36,3 @@ class EnabledSwitch(AcPidFrequencyEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         self.controller.async_set_enabled(False)
-
-
-class CapSwitch(AcPidFrequencyEntity, SwitchEntity):
-    """Hz-Deckel: begrenzt bei ausgeschaltetem Regler die Eigenregelung der Anlage."""
-
-    _attr_icon = "mdi:speedometer-slow"
-
-    def __init__(self, controller: AcPidFrequencyController) -> None:
-        super().__init__(controller, "cap_enabled")
-
-    @property
-    def is_on(self) -> bool:
-        return self.controller.cap_enabled
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        self.controller.async_set_cap_enabled(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        self.controller.async_set_cap_enabled(False)

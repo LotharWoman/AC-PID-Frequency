@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.3.1";
+const HZ_CARD_VERSION = "2.4.0";
 
 const HZ_I18N = {
   de: {
@@ -29,13 +29,13 @@ const HZ_I18N = {
     },
     status: {
       off: "Regler aus", idle: "Wartet (kein Heizbetrieb)", raise: "Frequenz erhöhen",
-      lower: "Frequenz senken", hold: "Im Zielbereich (lernend)", brake: "Notbremse aktiv",
-      defrost: "Abtauen aktiv (pausiert)", overheat: "Überhitzungsschutz aktiv", cap: "Hz-Deckel aktiv (Regler aus)",
+      lower: "Frequenz senken", hold: "Im Zielbereich (stabil)", min_mod: "Mindestmodulation (stabil gehalten)",
+      defrost: "Abtauen aktiv (pausiert)", overheat: "Überhitzungsschutz aktiv",
       waiting: "Daten fehlen – Wert gehalten", fault: "Fehler – Anlage nutzt eigenen Sensor",
     },
     unavailable: "Nicht verfügbar", simulated: "Simuliert", real: "Real", outdoor: "Außen", compressor: "Kompressor",
-    target_hz: "Ziel-Frequenz", brake: "Notbremse ab", controller: "Hz-Regelung",
-    sensor: "Sensor", offset: "Offset", factor: "Faktor", other_units: "Weitere Innengeräte",
+    target_hz: "Ziel-Frequenz", controller: "Hz-Regelung",
+    sensor: "Sensor", offset: "Offset", factor: "Faktor", min_hz: "Min", other_units: "Weitere Innengeräte",
     passthrough: "echte Raumtemperatur durchgereicht",
     more: "Details", minus: "Weniger", plus: "Mehr",
     not_found: "Kein AC-PID-Frequency-Regler für diese Klimaanlage gefunden. Ist die Integration eingerichtet?",
@@ -53,13 +53,13 @@ const HZ_I18N = {
     },
     status: {
       off: "Controller off", idle: "Waiting (not heating)", raise: "Raising frequency",
-      lower: "Lowering frequency", hold: "On target (learning)", brake: "Emergency brake",
-      defrost: "Defrost active (paused)", overheat: "Overheat protection active", cap: "Frequency cap active (controller off)",
+      lower: "Lowering frequency", hold: "On target (stable)", min_mod: "Minimum modulation (stabilized)",
+      defrost: "Defrost active (paused)", overheat: "Overheat protection active",
       waiting: "Data missing – value held", fault: "Fault – AC uses its own sensor",
     },
     unavailable: "Unavailable", simulated: "Simulated", real: "Real", outdoor: "Outdoor", compressor: "Compressor",
-    target_hz: "Target frequency", brake: "Emergency brake at", controller: "Frequency control",
-    sensor: "Sensor", offset: "Offset", factor: "Factor", other_units: "Other indoor units",
+    target_hz: "Target frequency", controller: "Frequency control",
+    sensor: "Sensor", offset: "Offset", factor: "Factor", min_hz: "Min", other_units: "Other indoor units",
     passthrough: "real room temperature passed through",
     more: "Details", minus: "Less", plus: "More",
     not_found: "No AC PID Frequency controller found for this air conditioner. Is the integration set up?",
@@ -137,7 +137,6 @@ const HZ_STYLE = `
   .bar .b-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--mode-color); transition: width .5s; }
   .bar .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; }
   .bar .mark.t { background: var(--primary-text-color); }
-  .bar .mark.k { background: var(--error-color, #db4437); }
   .legend { display: flex; gap: 10px; font-size: 11px; color: var(--secondary-text-color); }
   .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
 
@@ -164,10 +163,6 @@ const HZ_STYLE = `
                    background: var(--switch-unchecked-button-color, #fff); transition: transform .2s; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
   .toggle.on { background: var(--mode-color); }
   .toggle.on::after { transform: translateX(20px); }
-  .brake-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .brake-row .lbl { font-size: 13px; color: var(--primary-text-color); display: flex; align-items: center; gap: 6px;
-                    --mdc-icon-size: 18px; }
-  .brake-row .lbl ha-icon { color: var(--error-color, #db4437); }
 
   .modes { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
   .modes button { width: 46px; height: 46px; border-radius: 50%; border: none; cursor: pointer; --mdc-icon-size: 24px;
@@ -228,7 +223,6 @@ const HZ_TEMPLATE = `
             <div class="bar">
               <div class="b-fill" id="bar-fill"></div>
               <div class="mark t" id="mark-t"></div>
-              <div class="mark k" id="mark-k"></div>
             </div>
           </div>
           <div class="tile">
@@ -251,14 +245,6 @@ const HZ_TEMPLATE = `
           <button class="toggle" id="toggle" role="switch" aria-checked="false"></button>
         </div>
         <div class="detail" id="detail"></div>
-        <div class="brake-row">
-          <div class="lbl"><ha-icon icon="mdi:car-brake-alert"></ha-icon><span id="l-brake"></span></div>
-          <div class="stepper">
-            <button class="round small" id="bk-minus" aria-label="-"><ha-icon icon="mdi:minus"></ha-icon></button>
-            <div class="field"><input id="bk-in" type="number" inputmode="decimal" step="1"><span class="u">Hz</span></div>
-            <button class="round small" id="bk-plus" aria-label="+"><ha-icon icon="mdi:plus"></ha-icon></button>
-          </div>
-        </div>
       </div>
       <div class="notice" id="notice" hidden></div>
 
@@ -345,25 +331,21 @@ class AcPidFrequencyCard extends HTMLElement {
     dial.addEventListener("pointerup", endDrag);
     dial.addEventListener("pointercancel", endDrag);
 
-    // Ziel-Hz & Notbremse
+    // Ziel-Hz
     $("hz-minus").addEventListener("click", () => this._bumpNumber("hz", -1));
     $("hz-plus").addEventListener("click", () => this._bumpNumber("hz", 1));
-    $("bk-minus").addEventListener("click", () => this._bumpNumber("brake", -1));
-    $("bk-plus").addEventListener("click", () => this._bumpNumber("brake", 1));
-    for (const [key, id] of [["hz", "hz-in"], ["brake", "bk-in"]]) {
-      const input = $(id);
-      input.addEventListener("change", () => {
-        const value = parseFloat(String(input.value).replace(",", "."));
-        if (Number.isFinite(value)) {
-          this._pending[key] = this._clampNumber(key, value);
-          this._commit(key, 0);
-        }
-        this._update();
-      });
-      input.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") input.blur();
-      });
-    }
+    const input = $("hz-in");
+    input.addEventListener("change", () => {
+      const value = parseFloat(String(input.value).replace(",", "."));
+      if (Number.isFinite(value)) {
+        this._pending["hz"] = this._clampNumber("hz", value);
+        this._commit("hz", 0);
+      }
+      this._update();
+    });
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") input.blur();
+    });
 
     // Regler an/aus
     $("toggle").addEventListener("click", () => {
@@ -447,7 +429,7 @@ class AcPidFrequencyCard extends HTMLElement {
 
   _numberMeta(key) {
     const ctrl = this._ctrl();
-    const id = ctrl && ctrl.attributes[key === "hz" ? "target_hz_entity" : "brake_hz_entity"];
+    const id = ctrl && ctrl.attributes["target_hz_entity"];
     const st = id && this._hass.states[id];
     const a = (st && st.attributes) || {};
     return {
@@ -527,7 +509,6 @@ class AcPidFrequencyCard extends HTMLElement {
         const m = this._numberMeta(key);
         if (m.id) this._hass.callService("number", "set_value", { entity_id: m.id, value });
       }
-      // Anzeige noch kurz halten, bis der neue Zustand zurückkommt
       this._timers[`${key}-clear`] = setTimeout(() => {
         delete this._pending[key];
         this._update();
@@ -586,9 +567,6 @@ class AcPidFrequencyCard extends HTMLElement {
       $("knob").style.display = "none";
     }
 
-    // aktuelle Temperatur: Markierung am Bogen + Text
-    // Simuliert = Wert des erzeugten Sensors (fällt zurück auf current_temperature der Anlage),
-    // Real = echter Raumsensor aus dem Setup, Außen = Outdoor-Sensor aus dem Setup
     const ctrl = this._ctrl();
     const cAttr = (ctrl && ctrl.attributes) || {};
     let cur = this._num(hass.states[cAttr.temperature_entity]);
@@ -648,7 +626,6 @@ class AcPidFrequencyCard extends HTMLElement {
     $("l-comp").textContent = t.compressor;
     $("l-target").textContent = t.target_hz;
     $("l-ctrl").textContent = t.controller;
-    $("l-brake").textContent = t.brake;
     $("l-units").textContent = t.other_units;
     $("more").setAttribute("aria-label", t.more);
   }
@@ -675,25 +652,20 @@ class AcPidFrequencyCard extends HTMLElement {
     const hzNow = this._num(hass.states[ca.frequency_entity]);
     $("hz-val").textContent = hzNow == null ? "–" : this._fmt(hzNow, hzNow % 1 ? 1 : 0);
 
-    // Ziel-Hz und Notbremse
+    // Ziel-Hz
     const tg = this._numberMeta("hz");
-    const bk = this._numberMeta("brake");
     const tgVal = this._pending.hz ?? this._num(tg.state);
-    const bkVal = this._pending.brake ?? this._num(bk.state);
-    for (const [id, meta, val] of [["hz-in", tg, tgVal], ["bk-in", bk, bkVal]]) {
-      const input = $(id);
-      input.min = meta.min;
-      input.max = meta.max;
-      input.step = meta.step;
-      if (this.shadowRoot.activeElement !== input) input.value = val == null ? "" : String(val);
-    }
+    const input = $("hz-in");
+    input.min = tg.min;
+    input.max = tg.max;
+    input.step = tg.step;
+    if (this.shadowRoot.activeElement !== input) input.value = tgVal == null ? "" : String(tgVal);
 
-    // Balken: Ist, Ziel (weiß), Notbremse (rot)
-    const scale = Math.max(60, (bkVal || 0) * 1.15, (hzNow || 0) * 1.05, (tgVal || 0) * 1.1);
+    // Balken: Ist und Ziel (weiß)
+    const scale = Math.max(50, (hzNow || 0) * 1.15, (tgVal || 0) * 1.15);
     const pct = (v) => `${Math.max(0, Math.min(100, ((v || 0) / scale) * 100))}%`;
     $("bar-fill").style.width = pct(hzNow);
     $("mark-t").style.left = pct(tgVal);
-    $("mark-k").style.left = pct(bkVal);
 
     // Regler-Schalter und Status
     const sw = hass.states[ca.switch_entity];
@@ -704,21 +676,22 @@ class AcPidFrequencyCard extends HTMLElement {
     const status = ctrl.state;
     const statusEl = $("status");
     statusEl.textContent = t.status[status] || status;
-    statusEl.className = "status" + (status === "fault" ? " err" : status === "waiting" || status === "brake" || status === "cap" ? " warn" : "");
+    statusEl.className = "status" + (status === "fault" ? " err" : status === "waiting" || status === "defrost" || status === "overheat" ? " warn" : "");
 
     // Details zum vorgetäuschten Sensor
     const fake = this._num(hass.states[ca.temperature_entity]);
     const off = this._num(hass.states[ca.offset_entity]);
     const fac = this._num(hass.states[ca.factor_entity]);
+    const minHz = ca.learned_min_hz;
     const unit = (hass.config && hass.config.unit_system && hass.config.unit_system.temperature) || "°C";
     const parts = [];
     if (fake != null) parts.push(`${t.sensor} ${this._fmt(fake, 1)} ${unit}`);
     if (ca.passthrough && fake != null) {
-      // Regler regelt nicht: Anlage bekommt 1:1 die echte Raumtemperatur
       parts.push(t.passthrough);
     } else {
       if (off != null) parts.push(`${t.offset} ${off > 0 ? "+" : ""}${this._fmt(off, 2)} K`);
       if (fac != null) parts.push(`${t.factor} ${this._fmt(fac, 2)}`);
+      if (minHz != null && minHz > 12) parts.push(`${t.min_hz} ${this._fmt(minHz, 0)} Hz`);
     }
     $("detail").textContent = parts.join(" · ");
     $("detail").hidden = parts.length === 0;
@@ -854,7 +827,7 @@ if (!window.customCards.some((c) => c.type === "ac-pid-frequency-card")) {
     type: "ac-pid-frequency-card",
     name: "AC PID Frequency",
     description:
-      "Thermostat-Karte mit Kompressor-Frequenz, Ziel-Hz-Eingabe, Notbremse und Regler-Schalter.",
+      "Thermostat-Karte mit Kompressor-Frequenz, Ziel-Hz-Eingabe und Regler-Schalter.",
     preview: false,
   });
 }

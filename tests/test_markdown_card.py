@@ -35,7 +35,6 @@ async def test_markdown_card_regulating_and_off_and_missing_sensors(hass: HomeAs
     assert "| Außen | 8.0 °C |" in out
     assert "| Frequenz | |\n|:--|--:|\n| Ziel | **30 Hz** |" in out
     assert "| Abweichung | -9.0 Hz |" in out
-    assert "| Notbremse ab | 70 Hz |" in out
     assert "Wert (simuliert) | 19.7 °C" in out
     assert "Durchgereicht" in out
     assert "Erfahrungswert" not in out
