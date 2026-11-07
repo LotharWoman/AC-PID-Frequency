@@ -5,7 +5,7 @@
 # Template selbst aus den Attributen dieses Sensors.
 type: markdown
 content: |-
-  {% set st = 'sensor.ac_pid_scm40_status' -%}
+  {% set st = 'sensor.ac_pid_frequency_status' -%}
   {% set status = states(st) -%}
   {% set clim = state_attr(st, 'ac_pid_frequency_climate') -%}
   {% set pt = state_attr(st, 'passthrough') -%}
