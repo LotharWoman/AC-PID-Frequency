@@ -24,7 +24,9 @@ from custom_components.ac_pid_frequency.const import (
     CONF_MAX_OFFSET,
     CONF_MAX_ROOM_OVERHEAT,
     CONF_OUTDOOR_TEMP,
+    CONF_PROBE_INTERVAL,
     CONF_ROOM_TEMP,
+    CONF_WEATHER_TRIGGER_DELTA,
     DOMAIN,
     TUNING_DEFAULTS,
 )
@@ -228,6 +230,8 @@ async def test_numbers_and_status_attributes(hass: HomeAssistant) -> None:
     assert attrs["defrost_entity"] == DEFROST
     assert attrs["target_hz_entity"] == target
     assert "learned_min_hz" in attrs
+    assert attrs["reset_min_hz_button_entity"] == _eid(hass, entry, "button", "reset_min_hz")
+    assert attrs["reset_learning_button_entity"] == _eid(hass, entry, "button", "reset_learning")
 
 
 async def test_learned_state_survives_restart(hass: HomeAssistant, hass_storage) -> None:
@@ -260,7 +264,19 @@ async def test_reset_learning_button(hass: HomeAssistant) -> None:
         blocking=True,
     )
     assert entry.runtime_data.regelung.learned_table["normal"]["mid_low"] == 0.35
-    assert entry.runtime_data.regelung.learned_min_hz == 15.0
+    assert entry.runtime_data.regelung.learned_min_hz == 18.0
+
+
+async def test_reset_min_hz_button(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    entry.runtime_data.regelung.learned_table["normal"]["mid_low"] = 0.88
+    entry.runtime_data.regelung.learned_min_table["normal"] = 30.0
+    await hass.services.async_call(
+        "button", "press", {"entity_id": _eid(hass, entry, "button", "reset_min_hz")},
+        blocking=True,
+    )
+    assert entry.runtime_data.regelung.learned_table["normal"]["mid_low"] == 0.88
+    assert entry.runtime_data.regelung.learned_min_hz == 18.0
 
 
 async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
@@ -295,12 +311,18 @@ async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
         flow["flow_id"], {"next_step_id": "tuning"}
     )
     assert flow["step_id"] == "tuning"
-    good = {CONF_MAX_OFFSET: 2.5, CONF_MAX_ROOM_OVERHEAT: 1.5}
+    good = {
+        CONF_MAX_OFFSET: 2.5,
+        CONF_MAX_ROOM_OVERHEAT: 1.5,
+        CONF_WEATHER_TRIGGER_DELTA: 6.0,
+        CONF_PROBE_INTERVAL: 300.0,
+    }
     flow = await hass.config_entries.options.async_configure(flow["flow_id"], good)
     assert flow["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     params = entry.runtime_data.params
     assert params.max_offset == 2.5 and params.max_room_overheat == 1.5
+    assert params.weather_trigger_delta_k == 6.0 and params.probe_interval_min == 300.0
 
 
 async def test_card_is_served(hass: HomeAssistant, hass_client) -> None:

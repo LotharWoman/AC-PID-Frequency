@@ -199,4 +199,62 @@ def test_reset_learning():
     s.learned_min_hz = 32.0
     s.reset_learning()
     assert s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] == 0.35
-    assert s.learned_min_hz == 15.0
+    assert s.learned_min_hz == 18.0
+
+
+def test_reset_min_hz_only_resets_min_tables():
+    """reset_min_hz setzt nur die Mindestmodulation zurück, behält aber gelernte Offsets."""
+    s = State()
+    s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] = 0.85
+    s.learned_min_hz = 32.0
+    s.reset_min_hz()
+    assert s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] == 0.85
+    assert s.learned_min_hz == 18.0
+
+
+def test_user_trigger_resets_learned_min_hz_on_target_hz_change():
+    """Säule 2: Ändert der Nutzer Ziel-Hz, wird das gelernte Minimum für erneuten Test freigegeben."""
+    s = State()
+    s.learned_min_table[OUTDOOR_BIN_NORMAL] = 26.0
+    s.last_target_hz = 30.0
+    p = Params()
+    # Nutzer ändert Ziel-Hz von 30 auf 22
+    step(p, s, setpoint=21.0, hz=26.0, target_hz=22.0, outdoor_temp=8.0)
+    # Erlerntes Minimum wurde für diese Zone zurückgesetzt
+    assert s.learned_min_hz == regelung.DEFAULT_MIN_HZ_MAP[OUTDOOR_BIN_NORMAL]
+
+
+def test_user_trigger_resets_learned_min_hz_on_setpoint_change():
+    """Säule 2: Ändert der Nutzer den Setpoint, wird das gelernte Minimum zurückgesetzt."""
+    s = State()
+    s.learned_min_table[OUTDOOR_BIN_NORMAL] = 26.0
+    s.last_setpoint = 21.0
+    p = Params()
+    # Setpoint ändert sich auf 22.0
+    step(p, s, setpoint=22.0, hz=26.0, target_hz=30.0, outdoor_temp=8.0)
+    assert s.learned_min_hz == regelung.DEFAULT_MIN_HZ_MAP[OUTDOOR_BIN_NORMAL]
+
+
+def test_weather_delta_trigger_resets_learned_min_hz():
+    """Säule 3: Bei einer Außentemperaturänderung >= 5K wird das gelernte Minimum re-validiert."""
+    s = State()
+    s.learned_min_table[OUTDOOR_BIN_NORMAL] = 26.0
+    s.last_outdoor_temp_learned = 8.0
+    p = Params(weather_trigger_delta_k=5.0)
+    # Außentemperatur springt um 5.5 K (8.0 -> 2.5 °C, immer noch bin 'normal')
+    step(p, s, setpoint=21.0, hz=26.0, target_hz=30.0, outdoor_temp=2.5)
+    assert s.learned_min_hz == regelung.DEFAULT_MIN_HZ_MAP[OUTDOOR_BIN_NORMAL]
+
+
+def test_soft_probing_decreases_min_hz_after_interval():
+    """Säule 4: Läuft die Anlage stabil auf Mindestmodulation, wird nach 240min vorsichtig 1 Hz tiefer getestet."""
+    s = State()
+    s.learned_min_table[OUTDOOR_BIN_NORMAL] = 25.0
+    s.output = 20.9
+    p = Params(probe_interval_min=240.0, interval_s=60.0)
+    # 240 min im Mindestmodulationsmodus (14400s)
+    s.min_mod_steady_seconds = 240.0 * 60.0
+    step(p, s, setpoint=21.0, hz=25.0, target_hz=20.0, outdoor_temp=8.0)
+    # Erlernte Mindest-Hz wurde um 1 Hz abgesenkt zum Antasten
+    assert s.learned_min_hz == 24.0
+    assert s.min_mod_steady_seconds == 0.0

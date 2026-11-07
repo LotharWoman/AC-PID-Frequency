@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.4.0";
+const HZ_CARD_VERSION = "2.4.1";
 
 const HZ_I18N = {
   de: {
@@ -36,6 +36,7 @@ const HZ_I18N = {
     unavailable: "Nicht verfügbar", simulated: "Simuliert", real: "Real", outdoor: "Außen", compressor: "Kompressor",
     target_hz: "Ziel-Frequenz", controller: "Hz-Regelung",
     sensor: "Sensor", offset: "Offset", factor: "Faktor", min_hz: "Min", other_units: "Weitere Innengeräte",
+    min_hz_label: "Erlernte Mindest-Hz", reset_min: "Reset", reset_min_title: "Erlernte Mindest-Hz verwerfen und neu lernen",
     passthrough: "echte Raumtemperatur durchgereicht",
     more: "Details", minus: "Weniger", plus: "Mehr",
     not_found: "Kein AC-PID-Frequency-Regler für diese Klimaanlage gefunden. Ist die Integration eingerichtet?",
@@ -60,6 +61,7 @@ const HZ_I18N = {
     unavailable: "Unavailable", simulated: "Simulated", real: "Real", outdoor: "Outdoor", compressor: "Compressor",
     target_hz: "Target frequency", controller: "Frequency control",
     sensor: "Sensor", offset: "Offset", factor: "Factor", min_hz: "Min", other_units: "Other indoor units",
+    min_hz_label: "Learned min Hz", reset_min: "Reset", reset_min_title: "Reset learned minimum frequency and re-learn",
     passthrough: "real room temperature passed through",
     more: "Details", minus: "Less", plus: "More",
     not_found: "No AC PID Frequency controller found for this air conditioner. Is the integration set up?",
@@ -157,6 +159,19 @@ const HZ_STYLE = `
   .status.warn { color: var(--warning-color, #f4b400); }
   .status.err { color: var(--error-color, #db4437); }
   .detail { font-size: 12px; color: var(--secondary-text-color); }
+  .min-hz-row { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+                padding-top: 8px; border-top: 1px solid var(--divider-color, rgba(127,127,127,.2)); }
+  .min-hz-info { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--secondary-text-color); }
+  .min-hz-info ha-icon { --mdc-icon-size: 20px; color: var(--mode-color); }
+  .min-hz-info b { color: var(--primary-text-color); font-weight: 500; }
+  .reset-btn { background: var(--secondary-background-color, rgba(127,127,127,.15)); border: 1px solid var(--divider-color, rgba(127,127,127,.25));
+               border-radius: 8px; padding: 4px 10px; font-size: 12px; font-family: inherit;
+               color: var(--primary-text-color); cursor: pointer; display: inline-flex; align-items: center;
+               gap: 6px; transition: background .15s, transform .1s; }
+  .reset-btn ha-icon { --mdc-icon-size: 16px; color: var(--secondary-text-color); }
+  .reset-btn:hover { background: var(--secondary-background-color, rgba(127,127,127,.3)); }
+  .reset-btn:active { transform: scale(.96); }
+  .reset-btn:disabled { opacity: .4; cursor: default; }
   .toggle { width: 46px; height: 26px; border-radius: 13px; border: none; padding: 0; cursor: pointer; position: relative;
             background: var(--switch-unchecked-track-color, rgba(127,127,127,.5)); transition: background .2s; flex: none; }
   .toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
@@ -245,6 +260,16 @@ const HZ_TEMPLATE = `
           <button class="toggle" id="toggle" role="switch" aria-checked="false"></button>
         </div>
         <div class="detail" id="detail"></div>
+        <div class="min-hz-row" id="min-hz-row" hidden>
+          <div class="min-hz-info">
+            <ha-icon icon="mdi:arrow-collapse-down"></ha-icon>
+            <span id="l-min-hz-desc"></span>: <b id="min-hz-val">–</b>
+          </div>
+          <button class="reset-btn" id="reset-min-hz" type="button">
+            <ha-icon icon="mdi:restore"></ha-icon>
+            <span id="l-reset-min"></span>
+          </button>
+        </div>
       </div>
       <div class="notice" id="notice" hidden></div>
 
@@ -356,6 +381,14 @@ class AcPidFrequencyCard extends HTMLElement {
         entity_id: sw.entity_id,
       });
     });
+
+    // Mindest-Hz Reset
+    $("reset-min-hz").addEventListener("click", () => {
+      const ctrl = this._ctrl();
+      const btnId = ctrl && ctrl.attributes.reset_min_hz_button_entity;
+      if (!btnId) return;
+      this._hass.callService("button", "press", { entity_id: btnId });
+    });
   }
 
   // ------------------------------------------------------------------------ Hilfen
@@ -432,10 +465,15 @@ class AcPidFrequencyCard extends HTMLElement {
     const id = ctrl && ctrl.attributes["target_hz_entity"];
     const st = id && this._hass.states[id];
     const a = (st && st.attributes) || {};
+    let min = Number.isFinite(Number(a.min)) ? Number(a.min) : 0;
+    const learnedMin = ctrl && ctrl.attributes && Number(ctrl.attributes.learned_min_hz);
+    if (Number.isFinite(learnedMin) && learnedMin > min) {
+      min = learnedMin;
+    }
     return {
       id,
       state: st,
-      min: Number.isFinite(Number(a.min)) ? Number(a.min) : 0,
+      min,
       max: Number.isFinite(Number(a.max)) ? Number(a.max) : 120,
       step: Number(a.step) || 1,
     };
@@ -691,10 +729,25 @@ class AcPidFrequencyCard extends HTMLElement {
     } else {
       if (off != null) parts.push(`${t.offset} ${off > 0 ? "+" : ""}${this._fmt(off, 2)} K`);
       if (fac != null) parts.push(`${t.factor} ${this._fmt(fac, 2)}`);
-      if (minHz != null && minHz > 12) parts.push(`${t.min_hz} ${this._fmt(minHz, 0)} Hz`);
     }
     $("detail").textContent = parts.join(" · ");
     $("detail").hidden = parts.length === 0;
+
+    // Mindest-Hz & manueller Reset-Button
+    const minRow = $("min-hz-row");
+    if (minRow) {
+      if (minHz != null) {
+        minRow.hidden = false;
+        $("l-min-hz-desc").textContent = t.min_hz_label;
+        $("min-hz-val").textContent = `${this._fmt(minHz, 0)} Hz`;
+        $("l-reset-min").textContent = t.reset_min;
+        const resetBtn = $("reset-min-hz");
+        resetBtn.title = t.reset_min_title;
+        resetBtn.setAttribute("aria-label", t.reset_min_title);
+      } else {
+        minRow.hidden = true;
+      }
+    }
   }
 
   _updateModes(climate, t) {
