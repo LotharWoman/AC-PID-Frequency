@@ -336,6 +336,56 @@ async def test_card_is_served(hass: HomeAssistant, hass_client) -> None:
     assert entry.state is ConfigEntryState.LOADED
 
 
+async def test_lovelace_resource_auto_registration(hass: HomeAssistant) -> None:
+    from custom_components.ac_pid_frequency import (
+        _async_register_lovelace_resource,
+        _async_get_version_url,
+    )
+    from custom_components.ac_pid_frequency.const import CARD_URL
+
+    class MockResources:
+        def __init__(self):
+            self.items = []
+            self.loaded = True
+
+        def async_items(self):
+            return list(self.items)
+
+        async def async_create_item(self, data):
+            item = {"id": f"res_{len(self.items)}", **data}
+            self.items.append(item)
+            return item
+
+        async def async_update_item(self, item_id, data):
+            for item in self.items:
+                if item["id"] == item_id:
+                    item.update(data)
+                    return item
+
+    class MockLovelace:
+        def __init__(self):
+            self.resources = MockResources()
+
+    mock_ll = MockLovelace()
+    hass.data["lovelace"] = mock_ll
+
+    url1 = f"{CARD_URL}?v=2.4.1_100"
+    await _async_register_lovelace_resource(hass, url1)
+    assert len(mock_ll.resources.items) == 1
+    assert mock_ll.resources.items[0]["url"] == url1
+    assert mock_ll.resources.items[0]["res_type"] == "module"
+
+    # Zweiter Aufruf mit gleicher URL -> kein Duplikat
+    await _async_register_lovelace_resource(hass, url1)
+    assert len(mock_ll.resources.items) == 1
+
+    # Aufruf nach Update mit neuer URL -> bestehender Eintrag wird aktualisiert
+    url2 = f"{CARD_URL}?v=2.4.2_200"
+    await _async_register_lovelace_resource(hass, url2)
+    assert len(mock_ll.resources.items) == 1
+    assert mock_ll.resources.items[0]["url"] == url2
+
+
 # --------------------------------------------------------------------------------------
 # Durchreichen der echten Raumtemperatur (Passthrough)
 # --------------------------------------------------------------------------------------
