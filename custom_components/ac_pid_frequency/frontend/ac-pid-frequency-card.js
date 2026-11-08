@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.4.1";
+const HZ_CARD_VERSION = "2.4.3";
 
 const HZ_I18N = {
   de: {
@@ -869,10 +869,33 @@ class AcPidFrequencyCardEditor extends HTMLElement {
   }
 }
 
-if (!customElements.get("ac-pid-frequency-card")) {
-  customElements.define("ac-pid-frequency-card", AcPidFrequencyCard);
-  customElements.define("ac-pid-frequency-card-editor", AcPidFrequencyCardEditor);
-}
+// Registrierung erst, wenn das HA-Frontend vollständig läuft (hass gesetzt). Vorher definierte
+// Elemente können für das (gepatchte) Element-Register von HA unsichtbar bleiben
+// ("Custom element doesn't exist") – je nach Ladereihenfolge mal ja, mal nein.
+const HZ_DEFINE = () => {
+  if (customElements.get("ac-pid-frequency-card")) return true;
+  try {
+    customElements.define("ac-pid-frequency-card", AcPidFrequencyCard);
+    if (!customElements.get("ac-pid-frequency-card-editor")) {
+      customElements.define("ac-pid-frequency-card-editor", AcPidFrequencyCardEditor);
+    }
+  } catch (err) {
+    console.warn("AC-PID-FREQUENCY-CARD: Registrierung fehlgeschlagen", err);
+  }
+  return !!customElements.get("ac-pid-frequency-card");
+};
+(() => {
+  const started = Date.now();
+  const tick = () => {
+    const ha = document.querySelector("home-assistant");
+    if ((ha && ha.hass) || Date.now() - started > 8000) {
+      HZ_DEFINE();
+      return;
+    }
+    setTimeout(tick, 25);
+  };
+  tick();
+})();
 
 window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === "ac-pid-frequency-card")) {
