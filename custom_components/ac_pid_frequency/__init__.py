@@ -27,7 +27,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     integration = await async_get_integration(hass, DOMAIN)
     card = Path(__file__).parent / "frontend" / CARD_FILE
     await hass.http.async_register_static_paths([StaticPathConfig(CARD_URL, str(card), False)])
-    add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}")
+    try:
+        timestamp = int(card.stat().st_mtime)
+    except OSError:
+        timestamp = 0
+    add_extra_js_url(hass, f"{CARD_URL}?v={integration.version}_{timestamp}")
     return True
 
 
