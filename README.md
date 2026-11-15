@@ -4,21 +4,21 @@
 
 # AC PID Frequency
 
-Home-Assistant-Integration (HACS), die einer Klimaanlage einen **vorgetäuschten externen Raumtemperatursensor** liefert und sie damit auf eine **Ziel-Frequenz (Hz)** des Kompressors einpendelt. Die eigentliche Regelung bleibt bei der Anlage – die Integration verschiebt nur deren Eingangsgröße in 0,1-K-Schritten.
+Home-Assistant-Integration (HACS), die einer Klimaanlage einen **vorgetäuschten externen Raumtemperatursensor** liefert und sie damit auf eine **Ziel-Frequenz (Hz)** des Kompressors einpendelt. Die Integration arbeitet robust mit der Fremd- und Innenraumtemperatur, beobachtet die Anlage und lernt die passende Mindestmodulation sowie den passenden Arbeitspunkt selbst.
 
-Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home-Assistant-Entität) akzeptiert **und** die Kompressor-Frequenz als Zahlen-Entität liefert. Bei Multisplit wird nur das Master-Innengerät (das zuerst eingeschaltete) angegeben. Erst mal nur **Heizbetrieb**.
+Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home-Assistant-Entität) akzeptiert **und** die Kompressor-Frequenz als Zahlen-Entität liefert. Bei Multisplit wird nur die Master-Klimaanlage gesteuert; weitere Innengeräte werden nur als Status-Anzeige mitgeführt.
 
 ## Highlights des intelligenten, selbstlernenden Algorithmus
 
 * **Dynamisches 4-Säulen-System für Mindestmodulation & Abschaltschutz:**
-  Liegt die Soll-Hz unterhalb der erreichbaren Mindestmodulation (oder schaltet die Anlage ab), fängt der Regler die Anlage sofort über einen gezielten Kälte-Offset ab und hält sie stabil auf dem Minimum. Weil die physikalische Mindestmodulation je nach Wetter und Sollwert variiert, prüft der Regler die Gültigkeit dynamisch über 4 Säulen:
+  Liegt die Soll-Hz unterhalb der erreichbaren Mindestmodulation (oder schaltet die Anlage ab), fängt der Regler die Anlage sofort über einen gezielten Kälte-Offset ab und hält sie stabil auf dem Mindestpunkt.
   1. **Wetterzonen-Trennung:** Erlernte Min-Hz werden getrennt nach Außentemperaturzonen (Frost, Übergang, Mild) gespeichert.
   2. **User-Trigger:** Ändert der Nutzer Soll-Hz oder Solltemperatur, wird das gelernte Minimum verworfen – die Anlage darf wieder testen und neu lernen.
   3. **Wetter-Delta-Trigger (Standard: $\ge 5\,\text{K}$):** Ändert sich die Außentemperatur spürbar, wird die Mindestmodulation automatisch zur Re-Validierung freigegeben (in Optionen anpassbar).
   4. **Soft Probing (Standard: 240 min):** Läuft die Anlage über längere Zeit stabil auf Mindestmodulation, tastet sich der Regler behutsam 1 Hz tiefer vor, um ungenutztes Modulationspotenzial zu heben (in Optionen anpassbar).
 * **Selbstlernende Reaktionszeit & Verstärkung:** Ermittelt dynamisch aus echten Sprungantworten der Anlage die Totzeit und den Hz-Sprung je 0,1 K. Ein manuelles Einstellen von Reaktionszeiten oder Regelverstärkungen entfällt.
 * **Momentum-Erkennung (Trend-Entkopplung):** Bewegt sich der Kompressor bereits dynamisch auf das Ziel zu, wartet der Regler geduldig ab und verhindert überhastetes Nachlegen.
-* **Vollständige Abtau- & Post-Defrost-Behandlung:** Erkennt Abtauzyklen (über `hvac_action` oder Sensor), friert den Zustand ein und wartet nach Ende des Abtauens eine 120-sekündige Stabilisierungsphase ab, bevor geregelt wird.
+* **Vollständige Abtau- & Post-Defrost-Behandlung:** Erkennt Abtauzyklen (über `hvac_action` oder Sensor), friert den Zustand ein und wartet nach Ende des Abtauens eine 240-sekündige Stabilisierungsphase ab, bevor geregelt wird. Während der Abtauung und der Nach-Abtau-Stabilisierung zeigen die Statuswerte `defrost` bzw. `after-defrost-timer` an.
 * **Wetterabhängiges 2D-Arbeitspunkt-Lernen:** Lernt den nötigen Grund-Offset getrennt nach Außentemperaturzonen (Frost `< 2 °C`, Übergang `2–10 °C`, Mild `> 10 °C`) und Frequenzbereichen.
 * **Thermischer Überhitzungsschutz:** Drosselt die Frequenz sanft, wenn die tatsächliche Raumtemperatur die Solltemperatur um mehr als z. B. 1,0 K überschreitet.
 * **Echte Raumtemperatur durchreichen:** Ist der Regler aus (oder die Anlage heizt nicht), gibt der erzeugte Sensor die echte Raumtemperatur 1:1 weiter – die Anlage rechnet dann weiter mit deinem Raumthermometer statt mit ihrem oft zu warmen Deckensensor.
@@ -45,12 +45,12 @@ Alles lässt sich später ändern: Integration → *Konfigurieren* → „Entit�
 
 | Entität | Zweck |
 |---|---|
-| `sensor` Simulierte Raumtemperatur | Wert für die Anlage (0,1 K). Regler aus oder Anlage heizt nicht: **echte Raumtemperatur wird durchgereicht** (Offset 0,0 K, Änderungen sofort). **Wird `unavailable`**, wenn dann der Raumsensor fehlt bzw. keiner konfiguriert ist oder wenn bei laufender Regelung Daten zu lange fehlen → die Anlage nutzt ihren eigenen Innensensor |
-| `number` Ziel-Frequenz | Gewünschte Kompressor-Hz. Eingabe ist auf die erlernte Mindestmodulation nach unten begrenzt. Hier schreiben eigene Automationen hinein (z. B. PV-Logik) |
+| `sensor` Simulierte Raumtemperatur | Wert für die Anlage (0,1 K). Regler aus oder Anlage heizt nicht: **echte Raumtemperatur wird durchgereicht** (Offset 0,0 K, Änderungen sofort). **Wird `unavailable`**, nutzt die Anlage ihren eigenen Sensor. |
+| `number` Ziel-Frequenz | Gewünschte Kompressor-Hz. Eingabe ist auf die erlernte Mindestmodulation nach unten begrenzt. Hier schreiben eigene Automationen hinein (z. B. PV-Logik). |
 | `switch` Hz-Regelung | Regler ein/aus |
 | `button` Mindest-Hz zurücksetzen | Setzt nur die erlernte Mindestmodulation der Außentemperaturzonen auf die Basiswerte zurück (z. B. zum manuellen Neu-Testen) |
 | `button` Gelernte Werte zurücksetzen | Setzt alle Lerntabellen (Arbeitspunkt-Offsets, Mindestmodulation, Reaktionszeit) vollständig auf Werkseinstellungen zurück |
-| Diagnose-Sensoren | Status (inkl. `defrost`, `overheat` und `min_mod`), Offset, gelernter Offset, Frequenzabweichung, erlernte Mindestmodulation |
+| Diagnose-Sensoren | Status (inkl. `defrost`, `after-defrost-timer`, `overheat` und `min_mod`), Offset, gelernter Offset, Frequenzabweichung, erlernte Mindestmodulation |
 
 Beispiel für eine eigene Automation (z. B. PV-Logik):
 
@@ -85,11 +85,11 @@ entity: climate.mein_master_innengeraet
 # controller: sensor.…_status   (nur falls die automatische Zuordnung scheitert)
 ```
 
-Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und zeigt zusätzlich Kompressor-Ist-Hz mit Balken (Ziel = weiß), Eingabefeld mit +/- für die Ziel-Hz (nach unten automatisch auf die erlernte Mindest-Hz begrenzt), Regler-Schalter mit Status (inkl. Abtau-, Mindestmodulations- und Überhitzungsanzeige), Anzeige der erlernten Mindest-Hz mit manuellem Reset-Button sowie weitere Innengeräte. Ein Klick auf ein weiteres Innengerät öffnet dessen Klima-Dialog (Temperatur, Lüfter usw.).
+Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und zeigt zusätzlich Kompressor-Ist-Hz mit Balken (Ziel = weiß), Eingabefeld mit +/- für die Ziel-Hz (nach unten automatisch begrenzt), die Nach-Abtau-Stabilisierung als eigenen Status und den aktuellen Regelstatus.
 
 ## Logo / Branding
 
-Die Logos liegen im Ordner `custom_components/ac_pid_frequency/brand/` (`icon`, `logo`, jeweils `dark_` und `@2x`). Ab **Home Assistant 2026.3** werden sie von dort automatisch genutzt – ohne Eintrag im brands-Repository. Im Repository-Root liegen `icon.png` und `logo.png` für HACS/GitHub, unter `assets/` das Banner (`banner.png`, auch als `social-preview.png` für die GitHub-Repo-Einstellungen) und die SVG-Quellen.
+Die Logos liegen im Ordner `custom_components/ac_pid_frequency/brand/` (`icon`, `logo`, jeweils `dark_` und `@2x`). Ab **Home Assistant 2026.3** werden sie von dort automatisch genutzt – ohne Einzel-Setup im Frontend.
 
 ## Entwicklung / Tests
 
@@ -100,4 +100,4 @@ python -m pytest
 
 ## Beispiel: Markdown-Karte mit Statusübersicht
 
-`examples/markdown-card.yaml` zeigt Frequenz, Temperaturen, Sendetemperatur, Phase und gelernten Erfahrungswert als Tabellen. Nur die Entität des Status-Sensors in der ersten Template-Zeile muss angepasst werden, alles andere liest das Template aus dessen Attributen.
+`examples/markdown-card.yaml` zeigt Frequenz, Temperaturen, Sendetemperatur, Phase und gelernten Erfahrungswert als Tabellen. Nur die Entität des Status-Sensors in der ersten Template-Zeile muss angepasst werden.
