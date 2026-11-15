@@ -47,7 +47,8 @@ STATUS_OFF = "off"  # Regler ausgeschaltet
 STATUS_IDLE = "idle"  # Anlage nicht im Heizbetrieb
 STATUS_WAITING = "waiting"  # Eingangsdaten fehlen, letzter Wert wird gehalten
 STATUS_FAULT = "fault"  # Eingangsdaten fehlen zu lange, Sensor ist unavailable
-STATUS_DEFROST = "defrost"  # Abtauen / Nach-Abtau-Stabilisierung aktiv
+STATUS_DEFROST = "defrost"  # Abtauung aktiv
+STATUS_AFTER_DEFROST = "after-defrost-timer"  # Nach-Abtau-Stabilisierungsphase aktiv
 STATUS_OVERHEAT = "overheat"  # Raum überhitzt, thermischer Schutz aktiv
 STATUS_MIN_MOD = "min_mod"  # Ziel liegt unter erreichbarer Mindestmodulation, stabil gehalten
 
@@ -59,6 +60,7 @@ STATUSES = [
     "hold",
     STATUS_MIN_MOD,
     STATUS_DEFROST,
+    STATUS_AFTER_DEFROST,
     STATUS_OVERHEAT,
     STATUS_WAITING,
     STATUS_FAULT,
