@@ -135,9 +135,10 @@ async def test_intelligent_regulation_and_dead_time(hass: HomeAssistant) -> None
     await _tick(hass, 61)
     assert hass.states.get(sensor).state == "20.7"
 
-    # Nach weiteren 60s (120s gesamt) -> Totzeit verstrichen, Frequenz stagniert noch bei 10 -> Schritt kälter
+    # Nach weiteren 60s (120s gesamt) -> Totzeit verstrichen, Frequenz stagniert noch bei 10.
+    # Fehler 20 Hz (>= 10 Hz) -> großer Schritt kälter (0,3 K)
     await _tick(hass, 61)
-    assert hass.states.get(sensor).state == "20.6"
+    assert hass.states.get(sensor).state == "20.4"
 
     # Frequenz schießt hoch auf 50 Hz -> Mode lower
     hass.states.async_set(HZ, "50")
@@ -153,6 +154,26 @@ async def test_defrost_pauses_regulation(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
     status = hass.states.get(_eid(hass, entry, "sensor", "status"))
     assert status.state == "defrost"
+
+
+async def test_post_defrost_hold_is_shown_for_240_seconds(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="75", defrost="on")
+    status = _eid(hass, entry, "sensor", "status")
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(status).state == "defrost"
+
+    # Abtauen vorbei: Haltephase wird als eigener Status angezeigt, 240 s lang (4 Takte à 60 s)
+    hass.states.async_set(DEFROST, "off")
+    for _ in range(3):
+        await _tick(hass, 60)
+        assert hass.states.get(status).state == "post_defrost"
+    await _tick(hass, 60)
+    assert hass.states.get(status).state == "post_defrost"
+    await _tick(hass, 60)
+    assert hass.states.get(status).state != "post_defrost"
 
 
 async def test_overheat_protection_triggers(hass: HomeAssistant) -> None:

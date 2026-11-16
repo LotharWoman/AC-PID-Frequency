@@ -19,7 +19,7 @@ CARD = Path(__file__).parent.parent / "examples" / "markdown-card.yaml"
 def _render(hass: HomeAssistant, entry) -> str:
     content = yaml.safe_load(CARD.read_text(encoding="utf-8"))["content"]
     status = _eid(hass, entry, "sensor", "status")
-    content = content.replace("sensor.ac_pid_scm40_status", status)
+    content = content.replace("sensor.ac_pid_frequency_status", status)
     return Template(content, hass).async_render(parse_result=False)
 
 

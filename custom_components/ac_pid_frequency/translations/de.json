@@ -88,6 +88,7 @@
           "hold": "Im Zielbereich (stabil)",
           "min_mod": "Mindestmodulation (stabil gehalten)",
           "defrost": "Abtauen aktiv (pausiert)",
+          "post_defrost": "Haltephase nach Abtauen (pausiert)",
           "overheat": "Überhitzungsschutz aktiv",
           "waiting": "Daten fehlen (Wert gehalten)",
           "fault": "Fehler (Sensor nicht verfügbar)"

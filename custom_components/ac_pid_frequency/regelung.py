@@ -19,7 +19,7 @@ Besonderheiten dieses Algorithmus:
   und gegen Thermo-Off (Ausgehen) geschützt.
 * Vollständige Defrost- & Erholungsphasen-Behandlung:
   Während der Abtauung und in einer anschließenden Nach-Abtau-Stabilisierungsphase
-  (120 s) pausieren Regelung und Trendberechnung vollständig.
+  (240 s) pausieren Regelung und Trendberechnung vollständig.
 * Wetterabhängiges 2D-Arbeitspunkt-Lernen:
   Lernt für Außentemperaturzonen (Frost, Übergang, Mild) und Frequenzbereiche kontinuierlich
   den passenden Grund-Offset und speichert ihn dauerhaft.
@@ -48,7 +48,9 @@ MODE_RAISE = "raise"        # Frequenz zu niedrig -> Sensor schrittweise kälter
 MODE_LOWER = "lower"        # Frequenz zu hoch -> Sensor wärmer
 MODE_HOLD = "hold"          # Im Totband -> stabil halten & lernen
 MODE_MIN_MOD = "min_mod"    # Ziel unter Mindestmodulation -> stabil auf Minimum halten
-MODE_DEFROST = "defrost"    # Abtauung / Nach-Abtau-Phase -> pausiert
+MODE_DEFROST = "defrost"    # Abtauung -> pausiert
+MODE_POST_DEFROST = "post_defrost"  # Haltephase nach dem Abtauen -> pausiert
+POST_DEFROST_HOLD_S = 240.0  # Dauer der Haltephase nach dem Abtauen
 MODE_OVERHEAT = "overheat"  # Raum überhitzt -> thermischer Schutz aktiv
 
 # Außentemperatur-Bins
@@ -313,7 +315,7 @@ class Result:
     published: float         # Gerundet auf 0,1 K für den Home-Assistant-Sensor
     offset: float            # Soll minus Ausgabewert (K, positiv = heizen)
     error_hz: float          # ziel_hz minus ist_hz
-    mode: str                # raise / lower / hold / min_mod / defrost / overheat
+    mode: str                # raise / lower / hold / min_mod / defrost / post_defrost / overheat
     outdoor_bin: str         # Aktive Außentemperaturzone
     freq_bin: str            # Aktiver Frequenzbereich
     learned_offset: float    # Aktueller Erfahrungswert (K) für diesen Arbeitspunkt
@@ -405,7 +407,7 @@ def step(
 
     if s.was_defrosting:
         s.was_defrosting = False
-        s.post_defrost_remaining = 120.0
+        s.post_defrost_remaining = POST_DEFROST_HOLD_S
         s.time_since_last_step = 0.0
         s.hz_prev1 = s.hz_prev2 = None
         s.trend = 0.0
@@ -424,7 +426,7 @@ def step(
             published=round1(v_out),
             offset=round(setpoint - v_out, 2),
             error_hz=round(target_hz - hz, 1),
-            mode=MODE_DEFROST,
+            mode=MODE_POST_DEFROST,
             outdoor_bin=outdoor_bin,
             freq_bin=freq_bin,
             learned_offset=learned_offset,

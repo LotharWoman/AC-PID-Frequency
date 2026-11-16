@@ -24,6 +24,7 @@ MODE_RAISE = regelung.MODE_RAISE
 MODE_LOWER = regelung.MODE_LOWER
 MODE_MIN_MOD = regelung.MODE_MIN_MOD
 MODE_DEFROST = regelung.MODE_DEFROST
+MODE_POST_DEFROST = regelung.MODE_POST_DEFROST
 MODE_OVERHEAT = regelung.MODE_OVERHEAT
 
 
@@ -92,7 +93,7 @@ def test_deadband_learning_updates_table():
 
 
 def test_defrost_freezes_state_and_recovers_gracefully():
-    """Während des Abtauens pausiert der Regler und stabilisiert sich danach 120s."""
+    """Während des Abtauens pausiert der Regler und stabilisiert sich danach 240s."""
     s = State()
     s.output = 20.7
     p = Params(interval_s=60.0)
@@ -104,8 +105,8 @@ def test_defrost_freezes_state_and_recovers_gracefully():
 
     # Defrost beendet -> Post-Defrost Stabilisierung greift
     res_rec = step(p, s, 21.0, 25.0, 30.0, defrost=False)
-    assert res_rec.mode == MODE_DEFROST
-    assert s.post_defrost_remaining == 60.0
+    assert res_rec.mode == MODE_POST_DEFROST
+    assert s.post_defrost_remaining == 180.0  # 240 s Haltephase, ein Takt (60 s) verbraucht
     assert res_rec.published == 20.7  # Keine unbedachte Reaktion auf den Hz-Sprung
 
 

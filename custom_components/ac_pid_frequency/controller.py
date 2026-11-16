@@ -53,8 +53,6 @@ from .const import (
     DEFAULT_TARGET_HZ,
     DOMAIN,
     HVAC_MODE_ACTIVE,
-    STATUS_AFTER_DEFROST,
-    STATUS_DEFROST,
     STATUS_FAULT,
     STATUS_IDLE,
     STATUS_OFF,
@@ -69,7 +67,6 @@ from .regelung import Params, State, round1, step
 _LOGGER = logging.getLogger(__name__)
 
 SAVE_DELAY_S = 30
-POST_DEFROST_DURATION_S = 240.0
 
 
 def _to_float(value: Any) -> float | None:
@@ -275,10 +272,8 @@ class AcPidFrequencyController:
         defrost = self._read_defrost(climate if climate_ok else None)
 
         self._fault_since = None
-        was_defrosting = self.regelung.was_defrosting
-        params = self.params
         result = step(
-            params,
+            self.params,
             self.regelung,
             setpoint,
             hz,
@@ -287,23 +282,12 @@ class AcPidFrequencyController:
             room_temp=room_temp,
             defrost=defrost,
         )
-        # Die Nach-Abtauzeit beginnt nach Ende der Abtauung mit vollen 240 Sekunden.
-        # Der Regelkern zählt im Übergangstakt bereits ein Intervall herunter.
-        if was_defrosting and not defrost:
-            self.regelung.post_defrost_remaining = max(
-                0.0, POST_DEFROST_DURATION_S - params.interval_s
-            )
-
         self.available = True
         self.passthrough = False
         self.output = result.published
         self.offset = result.offset
         self.error_hz = result.error_hz
-        self.status = (
-            STATUS_AFTER_DEFROST
-            if not defrost and result.mode == STATUS_DEFROST
-            else result.mode
-        )
+        self.status = result.mode
         _LOGGER.debug(
             "Takt: soll=%.1f hz=%.1f ziel=%.0f (eff=%.1f min=%.1f) -> %s, sensor=%.1f (offset %.2f, gelernt %.2f K [%s/%s])",
             setpoint,
@@ -311,7 +295,7 @@ class AcPidFrequencyController:
             self.target_hz,
             result.effective_target_hz,
             result.learned_min_hz,
-            self.status,
+            result.mode,
             result.published,
             result.offset,
             result.learned_offset,

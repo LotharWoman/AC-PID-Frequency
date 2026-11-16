@@ -88,6 +88,7 @@
           "hold": "On target (stable)",
           "min_mod": "Minimum modulation (stabilized)",
           "defrost": "Defrost active (paused)",
+          "post_defrost": "Hold phase after defrost (paused)",
           "overheat": "Overheat protection active",
           "waiting": "Data missing (value held)",
           "fault": "Fault (sensor unavailable)"
