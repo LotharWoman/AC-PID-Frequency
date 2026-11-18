@@ -20,6 +20,7 @@ CONF_INDOOR_UNITS = "indoor_units"  # weitere Innengeräte (nur Anzeige)
 # --- Regel-Parameter (auf das absolut notwendige Minimum reduziert) -----------------------
 CONF_INTERVAL = "interval_s"
 CONF_FAULT_TIMEOUT = "fault_timeout_min"
+CONF_DEADBAND = "deadband_hz"
 CONF_MAX_OFFSET = "max_offset"
 CONF_MAX_ROOM_OVERHEAT = "max_room_overheat"
 CONF_WEATHER_TRIGGER_DELTA = "weather_trigger_delta_k"
@@ -32,6 +33,7 @@ DEFAULT_FAULT_TIMEOUT_MIN = 10
 TUNING_DEFAULTS: dict[str, float] = {
     CONF_INTERVAL: 60.0,
     CONF_FAULT_TIMEOUT: DEFAULT_FAULT_TIMEOUT_MIN,
+    CONF_DEADBAND: 2.0,
     CONF_MAX_OFFSET: 2.0,
     CONF_MAX_ROOM_OVERHEAT: 1.0,
     CONF_WEATHER_TRIGGER_DELTA: 5.0,

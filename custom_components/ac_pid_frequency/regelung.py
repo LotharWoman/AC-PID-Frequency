@@ -98,6 +98,11 @@ DEFAULT_LEARNED_OFFSETS: dict[str, dict[str, float]] = {
 }
 
 # Basis-Mindestmodulation je Außentemperaturzone (wird bei Reset / Wettertrigger angesetzt)
+# Plausibilitätsgrenzen für das Lernen der Mindestmodulation beim Kompressor-Stopp
+MIN_HZ_LEARN_FLOOR = 10.0   # darunter wird nichts gelernt
+MIN_HZ_LEARN_CEIL = 60.0    # darüber ist ein Stopp kein Mindestmodulations-Hinweis
+MIN_HZ_LEARN_MARGIN = 10.0  # letzte Hz höchstens so viel über dem Ziel
+
 DEFAULT_MIN_HZ_MAP: dict[str, float] = {
     OUTDOOR_BIN_COLD: 24.0,    # Frost: Mindestgrenze herstellerseitig oft höher
     OUTDOOR_BIN_NORMAL: 18.0,  # Übergang: typisch 18-24 Hz
@@ -441,15 +446,20 @@ def step(
 
     if compressor_off:
         # Die Anlage ist ausgegangen! War das die Folge eines Ziels unter Mindestmodulation?
+        last = s.last_running_hz
         if (
-            s.last_running_hz is not None
-            and s.last_running_hz > 10.0
-            and target_hz <= s.last_running_hz
+            last is not None
+            and MIN_HZ_LEARN_FLOOR < last <= min(MIN_HZ_LEARN_CEIL, target_hz + MIN_HZ_LEARN_MARGIN)
+            and target_hz < last
+            and s.output is not None
+            and setpoint - s.output <= 0.15  # Sensor war warm: wir wollten tiefer, nicht höher
         ):
-            # Der Kompressor lief zuletzt stabil bei last_running_hz und ging beim Versuch
-            # weiter abzusenken aus. Die Mindestmodulation ist damit exakt identifiziert!
+            # Der Kompressor lief zuletzt knapp über dem Ziel und ging beim Versuch weiter
+            # abzusenken aus. Die Mindestmodulation ist damit identifiziert. Ein Stopp aus großer
+            # Höhe (z. B. 65 Hz bei Ziel 35 Hz) ist dagegen kein Hinweis darauf und wird nicht gelernt.
             s.learned_min_table[outdoor_bin] = max(
-                DEFAULT_MIN_HZ_MAP[outdoor_bin], round(s.last_running_hz, 1)
+                DEFAULT_MIN_HZ_MAP[outdoor_bin],
+                _clamp(round(last, 1), MIN_HZ_LEARN_FLOOR, MIN_HZ_LEARN_CEIL),
             )
             s.learned_min_offset_table[outdoor_bin] = max(0.15, s.current_learned_offset)
             s.last_outdoor_temp_learned = outdoor_temp

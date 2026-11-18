@@ -22,7 +22,7 @@ Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home
 * **Wetterabhängiges 2D-Arbeitspunkt-Lernen:** Lernt den nötigen Grund-Offset getrennt nach Außentemperaturzonen (Frost `< 2 °C`, Übergang `2–10 °C`, Mild `> 10 °C`) und Frequenzbereichen.
 * **Thermischer Überhitzungsschutz:** Drosselt die Frequenz sanft, wenn die tatsächliche Raumtemperatur die Solltemperatur um mehr als z. B. 1,0 K überschreitet.
 * **Echte Raumtemperatur durchreichen:** Ist der Regler aus (oder die Anlage heizt nicht), gibt der erzeugte Sensor die echte Raumtemperatur 1:1 weiter – die Anlage rechnet dann weiter mit deinem Raumthermometer statt mit ihrem oft zu warmen Deckensensor.
-* **Minimale Konfiguration:** Keine Notbremse oder Dutzende verwirrende Parameter mehr – das Feintuning übernimmt der Algorithmus selbst! In den Optionen sind nur noch die Sicherheitsgrenzen sowie Wettertrigger ($\ge 5\,\text{K}$) und Soft-Probing-Intervall (240 min) konfigurierbar.
+* **Minimale Konfiguration:** Keine Notbremse oder Dutzende verwirrende Parameter mehr – das Feintuning übernimmt der Algorithmus selbst! In den Optionen sind nur noch Totband (Standard 2 Hz), Sicherheitsgrenzen sowie Wettertrigger ($\ge 5\,\text{K}$) und Soft-Probing-Intervall (240 min) konfigurierbar.
 
 ## Installation
 

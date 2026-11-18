@@ -17,6 +17,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.ac_pid_frequency.const import (
+    CONF_DEADBAND,
     CONF_CLIMATE,
     CONF_DEFROST,
     CONF_FREQUENCY,
@@ -333,6 +334,7 @@ async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
     )
     assert flow["step_id"] == "tuning"
     good = {
+        CONF_DEADBAND: 3.0,
         CONF_MAX_OFFSET: 2.5,
         CONF_MAX_ROOM_OVERHEAT: 1.5,
         CONF_WEATHER_TRIGGER_DELTA: 6.0,
@@ -342,6 +344,7 @@ async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
     assert flow["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     params = entry.runtime_data.params
+    assert params.deadband_hz == 3.0
     assert params.max_offset == 2.5 and params.max_room_overheat == 1.5
     assert params.weather_trigger_delta_k == 6.0 and params.probe_interval_min == 300.0
 
@@ -412,3 +415,33 @@ async def test_passthrough_when_not_heating_then_regulation_takes_over(
     hass.states.async_set(CLIMATE, "off", {"temperature": 21.0})
     await hass.async_block_till_done()
     assert hass.states.get(sensor).state == "22.4"
+
+
+async def test_store_is_only_scheduled_when_data_changed(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    ctrl = entry.runtime_data
+    calls = []
+    orig = ctrl._store.async_delay_save
+    ctrl._store.async_delay_save = lambda *a, **k: (calls.append(1), orig(*a, **k))[1]
+
+    ctrl._publish()  # Stand unverändert gegenüber dem letzten Speichern
+    ctrl._publish()
+    first = len(calls)
+    ctrl.async_set_target_hz(ctrl.target_hz + 5)  # echte Änderung
+    assert len(calls) == first + 1
+    ctrl._publish()
+    assert len(calls) == first + 1  # danach wieder nichts
+
+
+async def test_deadband_default_and_option_reach_params(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    assert entry.runtime_data.params.deadband_hz == 2.0
+
+
+async def test_pause_forgets_last_running_hz(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="40")
+    ctrl = entry.runtime_data
+    ctrl.regelung.last_running_hz = 40.0
+    hass.states.async_set(CLIMATE, "off", {"temperature": 21.0})
+    await _tick(hass, 60)
+    assert ctrl.regelung.last_running_hz is None

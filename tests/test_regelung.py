@@ -144,6 +144,7 @@ def test_compressor_shutoff_detection_learns_min_hz_and_restarts():
     s.last_running_hz = 27.0
     s.last_target_hz = 20.0
     s.current_learned_offset = 0.15
+    s.output = 20.9  # Sensor war warm (Soll - 0,1): der Regler wollte tiefer
     p = Params()
 
     # Kompressor geht auf 0 Hz aus
@@ -153,6 +154,35 @@ def test_compressor_shutoff_detection_learns_min_hz_and_restarts():
     assert res.mode == MODE_RAISE
     # Sendetemperatur kälter als Sollwert, damit die Anlage zuverlässig wieder anspringt
     assert res.published < 21.0
+
+
+def test_compressor_stop_from_high_hz_is_not_learned_as_min_hz():
+    """Ein Stopp aus großer Höhe (z. B. 65 Hz bei Ziel 35 Hz) ist keine Mindestmodulation."""
+    s = State()
+    s.last_running_hz = 65.0
+    s.output = 20.9
+    before = dict(s.learned_min_table)
+    step(Params(), s, setpoint=21.0, hz=0.0, target_hz=35.0)
+    assert s.learned_min_table == before
+
+
+def test_compressor_stop_with_cold_sensor_is_not_learned_as_min_hz():
+    """War der Sensor kalt (wir wollten mehr Hz), ist der Stopp kein Mindestmodulations-Hinweis."""
+    s = State()
+    s.last_running_hz = 27.0
+    s.output = 20.4  # 0,6 K unter Soll
+    before = dict(s.learned_min_table)
+    step(Params(), s, setpoint=21.0, hz=0.0, target_hz=20.0)
+    assert s.learned_min_table == before
+
+
+def test_learned_min_hz_is_capped_at_60():
+    s = State()
+    s.last_running_hz = 75.0
+    s.output = 20.95
+    before = dict(s.learned_min_table)
+    step(Params(), s, setpoint=21.0, hz=0.0, target_hz=70.0)
+    assert s.learned_min_table == before  # über 60 Hz nie als Minimum gelernt
 
 
 def test_learning_reaction_time_from_step_response():

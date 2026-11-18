@@ -60,11 +60,13 @@
         "description": "Reaction times and minimum modulation are learned automatically. Set limits and dynamic triggers here.",
         "data": {
           "max_offset": "Max offset to target temperature",
+          "deadband_hz": "Deadband",
           "max_room_overheat": "Max room overheating",
           "weather_trigger_delta_k": "Weather trigger (outdoor temperature change)",
           "probe_interval_min": "Soft probing interval"
         },
         "data_description": {
+          "deadband_hz": "Deviation of the compressor Hz from the target within which no correction is made (default 2 Hz).",
           "max_offset": "Maximum offset in Kelvin relative to target temperature.",
           "max_room_overheat": "If the real room exceeds target by more than this value, thermal throttling activates.",
           "weather_trigger_delta_k": "If the outdoor temperature changes by at least this amount (default 5 K), minimum modulation is re-evaluated.",

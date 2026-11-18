@@ -21,6 +21,7 @@ wenn auch dieser Wert fehlt (oder gar kein Raumsensor konfiguriert ist), wird de
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from datetime import datetime, timedelta
@@ -40,6 +41,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_CLIMATE,
+    CONF_DEADBAND,
     CONF_DEFROST,
     CONF_FAULT_TIMEOUT,
     CONF_FREQUENCY,
@@ -66,7 +68,7 @@ from .regelung import Params, State, round1, step
 
 _LOGGER = logging.getLogger(__name__)
 
-SAVE_DELAY_S = 30
+SAVE_DELAY_S = 120
 
 
 def _to_float(value: Any) -> float | None:
@@ -91,6 +93,7 @@ class AcPidFrequencyController:
         )
         self._unsubs: list = []
         self._fault_since: datetime | None = None
+        self._last_snapshot: str | None = None  # zuletzt gespeicherter Stand (Schreiblast sparen)
 
         self.signal = f"{DOMAIN}_update_{entry.entry_id}"
         self.device_info = DeviceInfo(
@@ -126,6 +129,7 @@ class AcPidFrequencyController:
         c = self.config
         return Params(
             interval_s=float(c[CONF_INTERVAL]),
+            deadband_hz=float(c[CONF_DEADBAND]),
             max_offset=float(c[CONF_MAX_OFFSET]),
             max_room_overheat=float(c[CONF_MAX_ROOM_OVERHEAT]),
             weather_trigger_delta_k=float(c.get(CONF_WEATHER_TRIGGER_DELTA, 5.0)),
@@ -143,6 +147,7 @@ class AcPidFrequencyController:
             self.target_hz = min(max(target, TARGET_HZ_MIN), TARGET_HZ_MAX)
         self.regelung.output = output
         self.regelung.load_learned_data(data)
+        self._last_snapshot = self._snapshot()
 
     @callback
     def async_start(self) -> None:
@@ -173,6 +178,10 @@ class AcPidFrequencyController:
 
     async def async_remove_storage(self) -> None:
         await self._store.async_remove()
+
+    def _snapshot(self) -> str:
+        """Wertbasierter Abzug der zu speichernden Daten (zum Erkennen von Änderungen)."""
+        return json.dumps(self._data_to_save(), sort_keys=True, default=str)
 
     def _data_to_save(self) -> dict[str, Any]:
         return {
@@ -234,7 +243,11 @@ class AcPidFrequencyController:
     def _publish(self) -> None:
         """Entitäten benachrichtigen und Zustand verzögert speichern."""
         async_dispatcher_send(self.hass, self.signal)
-        self._store.async_delay_save(self._data_to_save, SAVE_DELAY_S)
+        # Nur speichern, wenn sich der gespeicherte Stand wirklich geändert hat
+        snapshot = self._snapshot()
+        if snapshot != self._last_snapshot:
+            self._last_snapshot = snapshot
+            self._store.async_delay_save(self._data_to_save, SAVE_DELAY_S)
 
     def _evaluate(self) -> None:
         """Einen Regelschritt rechnen (oder den Fehlerfall behandeln)."""
@@ -357,6 +370,8 @@ class AcPidFrequencyController:
         self.status = status
         self._fault_since = None
         self.regelung.hz_prev1 = self.regelung.hz_prev2 = None
+        # Nach Pause/Aus nicht aus einem alten Wert lernen (z. B. Kompressor-Stopp beim Abschalten)
+        self.regelung.last_running_hz = None
 
     def _handle_missing_data(self) -> None:
         """Eingangsdaten fehlen: erst Wert halten, nach Zeitlimit unavailable."""
