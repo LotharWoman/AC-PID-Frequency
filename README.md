@@ -91,6 +91,9 @@ Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und
 
 Die Logos liegen im Ordner `custom_components/ac_pid_frequency/brand/` (`icon`, `logo`, jeweils `dark_` und `@2x`). Ab **Home Assistant 2026.3** werden sie von dort automatisch genutzt – ohne Eintrag im brands-Repository. Im Repository-Root liegen `icon.png` und `logo.png` für HACS/GitHub, unter `assets/` das Banner (`banner.png`, auch als `social-preview.png` für die GitHub-Repo-Einstellungen) und die SVG-Quellen.
 
+<img width="618" height="648" alt="grafik" src="https://github.com/user-attachments/assets/0ff46c94-34db-4c5c-af00-0d7adebd3ac7" />
+
+
 ## Entwicklung / Tests
 
 ```bash
