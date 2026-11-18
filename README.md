@@ -105,3 +105,6 @@ python -m pytest
 ## Beispiel: Markdown-Karte mit Statusübersicht
 
 `examples/markdown-card.yaml` zeigt Frequenz, Temperaturen, Sendetemperatur, Phase und gelernten Erfahrungswert als Tabellen. Nur die Entität des Status-Sensors in der ersten Template-Zeile muss angepasst werden, alles andere liest das Template aus dessen Attributen.
+
+<img width="618" height="648" alt="grafik" src="https://github.com/user-attachments/assets/e0286868-f677-4a22-9d9d-a621f077ff67" />
+
