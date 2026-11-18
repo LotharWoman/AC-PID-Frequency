@@ -105,3 +105,5 @@ python -m pytest
 ## Example: Markdown card with a status overview
 
 `examples/markdown-card.yaml` shows frequency, temperatures, sent temperature, phase and learned experience value as tables. Only the status sensor entity in the first template line needs to be adapted; the template reads everything else from its attributes.
+
+<img width="618" height="648" alt="grafik" src="https://github.com/user-attachments/assets/ceb69d53-bb90-4768-9e3c-f38656d51576" />
