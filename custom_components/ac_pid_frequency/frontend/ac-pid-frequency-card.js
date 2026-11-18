@@ -15,7 +15,7 @@
  *   show_units: false                    # weitere Innengeräte ausblenden
  */
 
-const HZ_CARD_VERSION = "2.4.4";
+const HZ_CARD_VERSION = "2.4.5";
 
 const HZ_I18N = {
   de: {
@@ -30,7 +30,7 @@ const HZ_I18N = {
     status: {
       off: "Regler aus", idle: "Wartet (kein Heizbetrieb)", raise: "Frequenz erhöhen",
       lower: "Frequenz senken", hold: "Im Zielbereich (stabil)", min_mod: "Mindestmodulation (stabil gehalten)",
-      defrost: "Abtauen aktiv (pausiert)", post_defrost: "Haltephase nach Abtauen (pausiert)", overheat: "Überhitzungsschutz aktiv",
+      defrost: "Abtauen aktiv (pausiert)", post_defrost: "Haltephase nach Abtauen (pausiert)", restart_wait: "Wartet auf Raumabkühlung (kein Neustart)", overheat: "Überhitzungsschutz aktiv",
       waiting: "Daten fehlen – Wert gehalten", fault: "Fehler – Anlage nutzt eigenen Sensor",
     },
     unavailable: "Nicht verfügbar", simulated: "Simuliert", real: "Real", outdoor: "Außen", compressor: "Kompressor",
@@ -55,7 +55,7 @@ const HZ_I18N = {
     status: {
       off: "Controller off", idle: "Waiting (not heating)", raise: "Raising frequency",
       lower: "Lowering frequency", hold: "On target (stable)", min_mod: "Minimum modulation (stabilized)",
-      defrost: "Defrost active (paused)", post_defrost: "Hold phase after defrost (paused)", overheat: "Overheat protection active",
+      defrost: "Defrost active (paused)", post_defrost: "Hold phase after defrost (paused)", restart_wait: "Waiting for room to cool (no restart)", overheat: "Overheat protection active",
       waiting: "Data missing – value held", fault: "Fault – AC uses its own sensor",
     },
     unavailable: "Unavailable", simulated: "Simulated", real: "Real", outdoor: "Outdoor", compressor: "Compressor",
@@ -714,7 +714,7 @@ class AcPidFrequencyCard extends HTMLElement {
     const status = ctrl.state;
     const statusEl = $("status");
     statusEl.textContent = t.status[status] || status;
-    statusEl.className = "status" + (status === "fault" ? " err" : status === "waiting" || status === "defrost" || status === "post_defrost" || status === "overheat" ? " warn" : "");
+    statusEl.className = "status" + (status === "fault" ? " err" : status === "waiting" || status === "defrost" || status === "post_defrost" || status === "restart_wait" || status === "overheat" ? " warn" : "");
 
     // Details zum vorgetäuschten Sensor
     const fake = this._num(hass.states[ca.temperature_entity]);

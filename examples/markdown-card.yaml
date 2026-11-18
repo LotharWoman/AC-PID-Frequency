@@ -35,6 +35,7 @@ content: |-
     'min_mod': 'Mindestmodulation (stabil gehalten)',
     'defrost': 'Eingefroren (Abtauen)',
     'post_defrost': 'Eingefroren (Haltephase)',
+    'restart_wait': 'Wartet (Raum zu warm)',
     'overheat': 'Steigen (Überhitzung)',
     'waiting': 'Halten (Daten fehlen)',
     'fault': 'Nicht verfügbar'} -%}
@@ -47,6 +48,7 @@ content: |-
     'min_mod': '⚓ Mindestmodulation erreicht',
     'defrost': '❄ Abtauen',
     'post_defrost': '⏳ Haltephase nach Abtauen',
+    'restart_wait': '🌡 Wartet auf Raumabkühlung',
     'overheat': '🌡 Raum zu warm',
     'waiting': '⏳ Daten fehlen',
     'fault': '⚠ Fehler'} -%}
@@ -59,6 +61,7 @@ content: |-
     'min_mod': 'Ziel liegt unterhalb der Mindestmodulation: Anlage wird stabil auf Minimum gehalten und schaltet nicht aus.',
     'defrost': 'Regelung und Lernen pausieren während des Abtauens.',
     'post_defrost': 'Nach dem Abtauen wird der Wert 4 Minuten gehalten, damit die Anlage sich stabilisiert.',
+    'restart_wait': 'Kompressor steht, der Raum ist noch zu warm: Es wird nicht neu angeschoben.',
     'overheat': 'Der Überhitzungsschutz drosselt die Frequenz.',
     'waiting': 'Eingangsdaten fehlen, der letzte Wert wird gehalten.',
     'fault': 'Eingangsdaten fehlen zu lange, die Anlage nutzt ihren eigenen Sensor.'} -%}

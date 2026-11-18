@@ -52,6 +52,7 @@ MODE_DEFROST = "defrost"    # Abtauung -> pausiert
 MODE_POST_DEFROST = "post_defrost"  # Haltephase nach dem Abtauen -> pausiert
 POST_DEFROST_HOLD_S = 240.0  # Dauer der Haltephase nach dem Abtauen
 MODE_OVERHEAT = "overheat"  # Raum überhitzt -> thermischer Schutz aktiv
+MODE_RESTART_WAIT = "restart_wait"  # Kompressor aus, Raum noch zu warm -> kein Neustart-Anschub
 
 # Außentemperatur-Bins
 OUTDOOR_BIN_COLD = "cold"      # < 2 °C (Frost / Winter)
@@ -152,6 +153,22 @@ class Params:
     learning_rate: float = 0.15           # Exponentielle Glättung beim Lernen im Totband
     weather_trigger_delta_k: float = 5.0  # K, Außentemperaturänderung für Re-Validierung
     probe_interval_min: float = 240.0     # min, Zeit auf Mindestmodulation vor Soft Probing
+    min_hz_cold: float = 24.0             # Hz, Start-/Untergrenze der Mindest-Hz je Außenzone
+    min_hz_normal: float = 18.0
+    min_hz_warm: float = 14.0
+    restart_margin_k: float = 0.0         # K, Neustart-Anschub erst wenn Raum < Soll + Abstand
+
+    def default_min_hz(self, outdoor_bin: str) -> float:
+        """Eingestellte Start-/Untergrenze der Mindest-Hz für die Außenzone."""
+        if outdoor_bin == OUTDOOR_BIN_COLD:
+            return self.min_hz_cold
+        if outdoor_bin == OUTDOOR_BIN_WARM:
+            return self.min_hz_warm
+        return self.min_hz_normal  # Übergang und "kein Außensensor"
+
+    def min_hz_map(self) -> dict[str, float]:
+        """Die eingestellten Mindest-Hz für alle Zonen (Form wie DEFAULT_MIN_HZ_MAP)."""
+        return {b: float(self.default_min_hz(b)) for b in OUTDOOR_BINS}
 
 
 @dataclass
@@ -219,10 +236,10 @@ class State:
     def learned_min_offset(self, val: float) -> None:
         self.learned_min_offset_table[self.current_outdoor_bin] = val
 
-    def reset_learning(self) -> None:
+    def reset_learning(self, min_hz_defaults: dict | None = None) -> None:
         """Setzt alle gelernten Tabellen und Anlageneigenschaften auf Werkseinstellungen zurück."""
         self.learned_table = copy.deepcopy(DEFAULT_LEARNED_OFFSETS)
-        self.learned_min_table = copy.deepcopy(DEFAULT_MIN_HZ_MAP)
+        self.learned_min_table = copy.deepcopy(min_hz_defaults or DEFAULT_MIN_HZ_MAP)
         self.learned_min_offset_table = copy.deepcopy(DEFAULT_MIN_OFFSET_MAP)
         self.learned_reaction_time = 90.0
         self.learned_sensitivity = 15.0
@@ -234,9 +251,9 @@ class State:
         self.min_mod_steady_seconds = 0.0
         self.last_outdoor_temp_learned = None
 
-    def reset_min_hz(self) -> None:
-        """Setzt nur die erlernte Mindestmodulation auf die Standard-Basiswerte zurück."""
-        self.learned_min_table = copy.deepcopy(DEFAULT_MIN_HZ_MAP)
+    def reset_min_hz(self, min_hz_defaults: dict | None = None) -> None:
+        """Setzt nur die erlernte Mindestmodulation auf die eingestellten Basiswerte zurück."""
+        self.learned_min_table = copy.deepcopy(min_hz_defaults or DEFAULT_MIN_HZ_MAP)
         self.learned_min_offset_table = copy.deepcopy(DEFAULT_MIN_OFFSET_MAP)
         self.min_mod_steady_seconds = 0.0
         self.low_hz_stagnation_count = 0
@@ -337,6 +354,7 @@ def step(
     outdoor_temp: float | None = None,
     room_temp: float | None = None,
     defrost: bool = False,
+    real_room_temp: float | None = None,
 ) -> Result:
     """Führt einen intelligenten, selbstlernenden Regelschritt aus."""
     s.time_since_last_step += p.interval_s
@@ -361,7 +379,7 @@ def step(
     if user_changed_target or user_changed_setpoint:
         # Mindestmodulation für diese Zone zurücksetzen, damit die Anlage aktiv neu testen darf
         # und ruhig einmalig ausgehen kann zum Neulernen
-        s.learned_min_table[outdoor_bin] = DEFAULT_MIN_HZ_MAP[outdoor_bin]
+        s.learned_min_table[outdoor_bin] = p.default_min_hz(outdoor_bin)
         s.min_mod_steady_seconds = 0.0
         s.low_hz_stagnation_count = 0
         s.stable_cycles = 0
@@ -376,7 +394,7 @@ def step(
             s.last_outdoor_temp_learned = outdoor_temp
         elif abs(outdoor_temp - s.last_outdoor_temp_learned) >= p.weather_trigger_delta_k:
             # Kältekreis-Bedingungen haben sich spürbar verändert -> Re-Validierung freigeben
-            s.learned_min_table[outdoor_bin] = DEFAULT_MIN_HZ_MAP[outdoor_bin]
+            s.learned_min_table[outdoor_bin] = p.default_min_hz(outdoor_bin)
             s.last_outdoor_temp_learned = outdoor_temp
             s.min_mod_steady_seconds = 0.0
 
@@ -444,6 +462,35 @@ def step(
     # ==================================================================
     compressor_off = hz <= 1.0
 
+    if compressor_off and real_room_temp is not None and real_room_temp >= (
+        setpoint + p.restart_margin_k
+    ):
+        # Kompressor steht und der echte Raum ist noch zu warm: Der Stopp kam von der Raum-
+        # temperatur, nicht von der Mindestmodulation. Nichts lernen, nicht anschieben, sondern
+        # Soll + 0,3 K senden, bis der Raum wieder unter Soll (+ Abstand) liegt.
+        v_out = _clamp(setpoint + 0.3, low, high)
+        s.output = v_out
+        s.time_since_last_step = 0.0
+        s.stable_cycles = 0
+        s.hz_prev1 = s.hz_prev2 = None
+        s.trend = 0.0
+        s.last_step_delta = 0.0
+        s.last_running_hz = None
+        s.min_mod_steady_seconds = 0.0
+        freq_bin = get_freq_bin(target_hz)
+        return Result(
+            output=v_out,
+            published=round1(v_out),
+            offset=round(setpoint - v_out, 2),
+            error_hz=round(target_hz - hz, 1),
+            mode=MODE_RESTART_WAIT,
+            outdoor_bin=outdoor_bin,
+            freq_bin=freq_bin,
+            learned_offset=s.current_learned_offset,
+            effective_target_hz=max(target_hz, s.learned_min_hz),
+            learned_min_hz=s.learned_min_hz,
+        )
+
     if compressor_off:
         # Die Anlage ist ausgegangen! War das die Folge eines Ziels unter Mindestmodulation?
         last = s.last_running_hz
@@ -458,7 +505,7 @@ def step(
             # abzusenken aus. Die Mindestmodulation ist damit identifiziert. Ein Stopp aus großer
             # Höhe (z. B. 65 Hz bei Ziel 35 Hz) ist dagegen kein Hinweis darauf und wird nicht gelernt.
             s.learned_min_table[outdoor_bin] = max(
-                DEFAULT_MIN_HZ_MAP[outdoor_bin],
+                p.default_min_hz(outdoor_bin),
                 _clamp(round(last, 1), MIN_HZ_LEARN_FLOOR, MIN_HZ_LEARN_CEIL),
             )
             s.learned_min_offset_table[outdoor_bin] = max(0.15, s.current_learned_offset)
@@ -586,7 +633,7 @@ def step(
         s.low_hz_stagnation_count += 1
         if s.low_hz_stagnation_count >= 3:
             s.learned_min_table[outdoor_bin] = max(
-                DEFAULT_MIN_HZ_MAP[outdoor_bin], round(hz, 1)
+                p.default_min_hz(outdoor_bin), round(hz, 1)
             )
             s.learned_min_offset_table[outdoor_bin] = max(0.1, current_offset)
             effective_target = s.learned_min_hz
@@ -612,7 +659,7 @@ def step(
             if s.min_mod_steady_seconds >= probe_interval_s:
                 # Nach Ablauf der Zeit (Standard 240 min) vorsichtig um 1.0 Hz absenken
                 s.learned_min_table[outdoor_bin] = max(
-                    DEFAULT_MIN_HZ_MAP[outdoor_bin],
+                    p.default_min_hz(outdoor_bin),
                     s.learned_min_table[outdoor_bin] - 1.0,
                 )
                 s.min_mod_steady_seconds = 0.0

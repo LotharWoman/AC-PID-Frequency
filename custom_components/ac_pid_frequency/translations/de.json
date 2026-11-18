@@ -63,14 +63,22 @@
           "deadband_hz": "Totband",
           "max_room_overheat": "Max. Raumüberhitzung",
           "weather_trigger_delta_k": "Wettertrigger (Außentemperatur-Änderung)",
-          "probe_interval_min": "Soft Probing Intervall"
+          "probe_interval_min": "Soft Probing Intervall",
+          "min_hz_cold": "Mindest-Hz bei Frost (unter 2 °C)",
+          "min_hz_normal": "Mindest-Hz im Übergang (2 bis 10 °C)",
+          "min_hz_warm": "Mindest-Hz bei mildem Wetter (über 10 °C)",
+          "restart_margin_k": "Neustart-Abstand zum Soll"
         },
         "data_description": {
           "deadband_hz": "Abweichung der Kompressor-Hz vom Ziel, innerhalb der nicht nachgeregelt wird (Standard 2 Hz).",
           "max_offset": "Maximaler Offset in Kelvin relativ zur Solltemperatur.",
           "max_room_overheat": "Steigt der echte Raum um mehr als diesen Wert über Soll, wird thermisch gedrosselt.",
           "weather_trigger_delta_k": "Ändert sich die Außentemperatur um mindestens diesen Wert (Standard 5 K), wird die Mindestmodulation zur Neu-Validierung freigegeben.",
-          "probe_interval_min": "Läuft die Anlage diese Zeit (Standard 240 min) ununterbrochen auf Mindestmodulation, tastet der Regler sanft nach unten ab."
+          "probe_interval_min": "Läuft die Anlage diese Zeit (Standard 240 min) ununterbrochen auf Mindestmodulation, tastet der Regler sanft nach unten ab.",
+          "min_hz_cold": "Start- und Untergrenze der Mindestmodulation bei Frost (Standard 24 Hz). Bei Änderung wird die gelernte Mindestmodulation neu angesetzt.",
+          "min_hz_normal": "Start- und Untergrenze im Übergangsbereich bzw. ohne Außensensor (Standard 18 Hz). Läuft deine Anlage stabil tiefer, hier den gemessenen Wert eintragen.",
+          "min_hz_warm": "Start- und Untergrenze bei mildem Wetter (Standard 14 Hz).",
+          "restart_margin_k": "Nach einem Kompressor-Stopp wird erst angeschoben, wenn der echte Raum unter Soll plus diesen Wert liegt (Standard 0 K). Gilt nur mit konfiguriertem Raumsensor."
         }
       }
     }
@@ -93,7 +101,8 @@
           "post_defrost": "Haltephase nach Abtauen (pausiert)",
           "overheat": "Überhitzungsschutz aktiv",
           "waiting": "Daten fehlen (Wert gehalten)",
-          "fault": "Fehler (Sensor nicht verfügbar)"
+          "fault": "Fehler (Sensor nicht verfügbar)",
+          "restart_wait": "Wartet auf Raumabkühlung (kein Neustart)"
         }
       },
       "offset": {

@@ -42,6 +42,10 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_CLIMATE,
     CONF_DEADBAND,
+    CONF_MIN_HZ_COLD,
+    CONF_MIN_HZ_NORMAL,
+    CONF_MIN_HZ_WARM,
+    CONF_RESTART_MARGIN,
     CONF_DEFROST,
     CONF_FAULT_TIMEOUT,
     CONF_FREQUENCY,
@@ -64,7 +68,7 @@ from .const import (
     TARGET_HZ_MIN,
     TUNING_DEFAULTS,
 )
-from .regelung import Params, State, round1, step
+from .regelung import DEFAULT_MIN_HZ_MAP, Params, State, round1, step
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,6 +97,8 @@ class AcPidFrequencyController:
         )
         self._unsubs: list = []
         self._fault_since: datetime | None = None
+        # Mindest-Hz-Einstellungen, auf denen die gelernte Tabelle beruht (wird mitgespeichert)
+        self._min_hz_cfg: dict[str, float] = dict(DEFAULT_MIN_HZ_MAP)
         self._last_snapshot: str | None = None  # zuletzt gespeicherter Stand (Schreiblast sparen)
 
         self.signal = f"{DOMAIN}_update_{entry.entry_id}"
@@ -130,6 +136,10 @@ class AcPidFrequencyController:
         return Params(
             interval_s=float(c[CONF_INTERVAL]),
             deadband_hz=float(c[CONF_DEADBAND]),
+            min_hz_cold=float(c[CONF_MIN_HZ_COLD]),
+            min_hz_normal=float(c[CONF_MIN_HZ_NORMAL]),
+            min_hz_warm=float(c[CONF_MIN_HZ_WARM]),
+            restart_margin_k=float(c[CONF_RESTART_MARGIN]),
             max_offset=float(c[CONF_MAX_OFFSET]),
             max_room_overheat=float(c[CONF_MAX_ROOM_OVERHEAT]),
             weather_trigger_delta_k=float(c.get(CONF_WEATHER_TRIGGER_DELTA, 5.0)),
@@ -147,7 +157,25 @@ class AcPidFrequencyController:
             self.target_hz = min(max(target, TARGET_HZ_MIN), TARGET_HZ_MAX)
         self.regelung.output = output
         self.regelung.load_learned_data(data)
+        self._apply_min_hz_settings(data)
         self._last_snapshot = self._snapshot()
+
+    def _apply_min_hz_settings(self, data: dict[str, Any]) -> None:
+        """Eingestellte Mindest-Hz je Zone übernehmen.
+
+        Wurden die Einstellungen seit dem letzten Speichern geändert, wird die gelernte
+        Mindestmodulation auf die neuen Werte angesetzt. Sonst gelten sie als Untergrenze.
+        """
+        wanted = self.params.min_hz_map()
+        stored = data.get("min_hz_cfg")
+        stored = stored if isinstance(stored, dict) else dict(DEFAULT_MIN_HZ_MAP)
+        self._min_hz_cfg = wanted
+        if {b: _to_float(stored.get(b)) for b in wanted} != wanted:
+            self.regelung.reset_min_hz(wanted)
+            return
+        table = self.regelung.learned_min_table
+        for zone, minimum in wanted.items():
+            table[zone] = max(minimum, table.get(zone, minimum))
 
     @callback
     def async_start(self) -> None:
@@ -188,6 +216,7 @@ class AcPidFrequencyController:
             "enabled": self.enabled,
             "target_hz": self.target_hz,
             "output": self.regelung.output,
+            "min_hz_cfg": self._min_hz_cfg,
             **self.regelung.export_learned_data(),
         }
 
@@ -205,13 +234,15 @@ class AcPidFrequencyController:
     @callback
     def async_reset_learning(self) -> None:
         """Setzt die gelernte Arbeitspunkt-Tabelle und Anlageneigenschaften auf Werkseinstellungen zurück."""
-        self.regelung.reset_learning()
+        self._min_hz_cfg = self.params.min_hz_map()
+        self.regelung.reset_learning(self._min_hz_cfg)
         self._publish()
 
     @callback
     def async_reset_min_hz(self) -> None:
         """Setzt die gelernte Mindestmodulation auf die Werkseinstellungen zurück."""
-        self.regelung.reset_min_hz()
+        self._min_hz_cfg = self.params.min_hz_map()
+        self.regelung.reset_min_hz(self._min_hz_cfg)
         self._publish()
 
     # ------------------------------------------------------------------ Takt
@@ -294,6 +325,7 @@ class AcPidFrequencyController:
             outdoor_temp=outdoor_temp,
             room_temp=room_temp,
             defrost=defrost,
+            real_room_temp=self._configured_room_temp(),
         )
         self.available = True
         self.passthrough = False

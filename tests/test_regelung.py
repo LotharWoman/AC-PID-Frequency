@@ -25,6 +25,7 @@ MODE_LOWER = regelung.MODE_LOWER
 MODE_MIN_MOD = regelung.MODE_MIN_MOD
 MODE_DEFROST = regelung.MODE_DEFROST
 MODE_POST_DEFROST = regelung.MODE_POST_DEFROST
+MODE_RESTART_WAIT = regelung.MODE_RESTART_WAIT
 MODE_OVERHEAT = regelung.MODE_OVERHEAT
 
 
@@ -183,6 +184,55 @@ def test_learned_min_hz_is_capped_at_60():
     before = dict(s.learned_min_table)
     step(Params(), s, setpoint=21.0, hz=0.0, target_hz=70.0)
     assert s.learned_min_table == before  # über 60 Hz nie als Minimum gelernt
+
+
+def test_configured_zone_min_hz_allows_targets_below_old_default():
+    """SRF50-Fall: Mindest-Hz 12 Hz im Übergangsbereich, Ziel 14 Hz wird nicht auf 18 Hz gehoben."""
+    p = Params(min_hz_normal=12.0)
+    s = State()
+    s.learned_min_table = p.min_hz_map()
+    res = step(p, s, setpoint=21.0, hz=14.0, target_hz=14.0, outdoor_temp=6.0)
+    assert res.outdoor_bin == "normal"
+    assert res.learned_min_hz == 12.0
+    assert res.effective_target_hz == 14.0
+    assert res.mode != MODE_MIN_MOD
+
+
+def test_probing_and_reset_respect_configured_zone_floor():
+    p = Params(min_hz_normal=12.0, probe_interval_min=1.0, interval_s=60.0)
+    s = State()
+    s.learned_min_table = {**p.min_hz_map(), "normal": 14.0}
+    # User-Trigger setzt auf die eingestellte Untergrenze (12), nicht auf 18
+    step(p, s, setpoint=21.0, hz=14.0, target_hz=14.0, outdoor_temp=6.0)
+    step(p, s, setpoint=21.0, hz=14.0, target_hz=20.0, outdoor_temp=6.0)
+    assert s.learned_min_table["normal"] == 12.0
+
+
+def test_no_restart_push_and_no_learning_while_room_is_warm():
+    p = Params()
+    s = State()
+    s.last_running_hz = 20.0
+    s.output = 21.3
+    before = dict(s.learned_min_table)
+    res = step(p, s, setpoint=21.0, hz=0.0, target_hz=20.0, real_room_temp=23.0)
+    assert res.mode == MODE_RESTART_WAIT
+    assert res.published == 21.3  # Soll + 0,3 K statt kaltem Anschub
+    assert s.learned_min_table == before  # Stopp kam von der Raumtemperatur
+    assert s.last_running_hz is None
+
+
+def test_restart_push_when_room_below_setpoint_plus_margin():
+    p = Params(restart_margin_k=0.5)
+    s = State()
+    res = step(p, s, setpoint=21.0, hz=0.0, target_hz=20.0, real_room_temp=21.4)
+    assert res.mode == MODE_RAISE and res.published < 21.0
+    res2 = step(p, State(), setpoint=21.0, hz=0.0, target_hz=20.0, real_room_temp=21.5)
+    assert res2.mode == MODE_RESTART_WAIT
+
+
+def test_restart_push_unchanged_without_real_room_sensor():
+    res = step(Params(), State(), setpoint=21.0, hz=0.0, target_hz=20.0)
+    assert res.mode == MODE_RAISE and res.published < 21.0
 
 
 def test_learning_reaction_time_from_step_response():

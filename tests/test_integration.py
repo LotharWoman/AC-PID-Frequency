@@ -18,6 +18,10 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.ac_pid_frequency.const import (
     CONF_DEADBAND,
+    CONF_MIN_HZ_COLD,
+    CONF_MIN_HZ_NORMAL,
+    CONF_MIN_HZ_WARM,
+    CONF_RESTART_MARGIN,
     CONF_CLIMATE,
     CONF_DEFROST,
     CONF_FREQUENCY,
@@ -335,6 +339,10 @@ async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
     assert flow["step_id"] == "tuning"
     good = {
         CONF_DEADBAND: 3.0,
+        CONF_MIN_HZ_COLD: 26.0,
+        CONF_MIN_HZ_NORMAL: 12.0,
+        CONF_MIN_HZ_WARM: 10.0,
+        CONF_RESTART_MARGIN: 0.5,
         CONF_MAX_OFFSET: 2.5,
         CONF_MAX_ROOM_OVERHEAT: 1.5,
         CONF_WEATHER_TRIGGER_DELTA: 6.0,
@@ -345,6 +353,8 @@ async def test_options_flow_entities_and_tuning(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
     params = entry.runtime_data.params
     assert params.deadband_hz == 3.0
+    assert (params.min_hz_cold, params.min_hz_normal, params.min_hz_warm) == (26.0, 12.0, 10.0)
+    assert params.restart_margin_k == 0.5
     assert params.max_offset == 2.5 and params.max_room_overheat == 1.5
     assert params.weather_trigger_delta_k == 6.0 and params.probe_interval_min == 300.0
 
@@ -445,3 +455,60 @@ async def test_pause_forgets_last_running_hz(hass: HomeAssistant) -> None:
     hass.states.async_set(CLIMATE, "off", {"temperature": 21.0})
     await _tick(hass, 60)
     assert ctrl.regelung.last_running_hz is None
+
+
+async def test_restart_wait_while_room_warm_then_restart_push(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="0", room="22.5")  # Soll 21,0, Raum zu warm, Kompressor steht
+    status = _eid(hass, entry, "sensor", "status")
+    temp = _eid(hass, entry, "sensor", "temperature")
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(status).state == "restart_wait"
+    assert hass.states.get(temp).state == "21.3"  # Soll + 0,3 K, kein kalter Anschub
+
+    # Raum kühlt unter Soll ab: jetzt wird angeschoben (kälter als Soll)
+    hass.states.async_set(ROOM, "20.8")
+    await _tick(hass, 60)
+    assert hass.states.get(status).state == "raise"
+    assert float(hass.states.get(temp).state) < 21.0
+
+
+async def test_restart_margin_option_delays_restart_hold(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="0", room="21.2")
+    hass.config_entries.async_update_entry(entry, options={CONF_RESTART_MARGIN: 0.5})
+    await hass.async_block_till_done()
+    ctrl = entry.runtime_data
+    assert ctrl.params.restart_margin_k == 0.5
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": _eid(hass, entry, "switch", "enabled")}, blocking=True
+    )
+    await hass.async_block_till_done()
+    # 21,2 < Soll 21,0 + 0,5: Abstand erreicht, es wird angeschoben
+    assert hass.states.get(_eid(hass, entry, "sensor", "status")).state == "raise"
+
+
+async def test_zone_min_hz_settings_seed_and_reset_learning(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    ctrl = entry.runtime_data
+    hass.config_entries.async_update_entry(
+        entry, options={CONF_MIN_HZ_NORMAL: 12.0, CONF_MIN_HZ_WARM: 11.0}
+    )
+    await hass.async_block_till_done()
+    ctrl = entry.runtime_data  # nach Reload mit neuen Einstellungen
+    assert ctrl.regelung.learned_min_table["normal"] == 12.0
+    assert ctrl.regelung.learned_min_table["warm"] == 11.0
+    assert ctrl.regelung.learned_min_table["cold"] == 24.0
+
+    ctrl.regelung.learned_min_table["normal"] = 30.0  # gelernt
+    ctrl.async_reset_min_hz()
+    assert ctrl.regelung.learned_min_table["normal"] == 12.0  # zurück auf eingestellten Wert
+
+
+async def test_learned_min_never_below_configured_floor_after_restart(hass: HomeAssistant) -> None:
+    entry = await _setup(hass)
+    ctrl = entry.runtime_data
+    ctrl.regelung.learned_min_table["normal"] = 16.0  # alter Speicherstand unter Untergrenze 18
+    ctrl._apply_min_hz_settings({"min_hz_cfg": ctrl.params.min_hz_map()})
+    assert ctrl.regelung.learned_min_table["normal"] == 18.0

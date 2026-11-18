@@ -4,25 +4,29 @@
 
 # AC PID Frequency
 
+🇬🇧 [English version](README.en.md)
+
 Home-Assistant-Integration (HACS), die einer Klimaanlage einen **vorgetäuschten externen Raumtemperatursensor** liefert und sie damit auf eine **Ziel-Frequenz (Hz)** des Kompressors einpendelt. Die eigentliche Regelung bleibt bei der Anlage – die Integration verschiebt nur deren Eingangsgröße in 0,1-K-Schritten.
 
 Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home-Assistant-Entität) akzeptiert **und** die Kompressor-Frequenz als Zahlen-Entität liefert. Bei Multisplit wird nur das Master-Innengerät (das zuerst eingeschaltete) angegeben. Erst mal nur **Heizbetrieb**.
 
 ## Highlights des intelligenten, selbstlernenden Algorithmus
 
-* **Dynamisches 4-Säulen-System für Mindestmodulation & Abschaltschutz:**
-  Liegt die Soll-Hz unterhalb der erreichbaren Mindestmodulation (oder schaltet die Anlage ab), fängt der Regler die Anlage sofort über einen gezielten Kälte-Offset ab und hält sie stabil auf dem Minimum. Weil die physikalische Mindestmodulation je nach Wetter und Sollwert variiert, prüft der Regler die Gültigkeit dynamisch über 4 Säulen:
+* **Dynamisches 5-Säulen-System für Mindestmodulation & Abschaltschutz:**
+  Liegt die Soll-Hz unterhalb der erreichbaren Mindestmodulation (oder schaltet die Anlage ab), fängt der Regler die Anlage sofort über einen gezielten Kälte-Offset ab und hält sie stabil auf dem Minimum. Weil die physikalische Mindestmodulation je nach Wetter und Sollwert variiert, prüft der Regler die Gültigkeit dynamisch über 5 Säulen:
   1. **Wetterzonen-Trennung:** Erlernte Min-Hz werden getrennt nach Außentemperaturzonen (Frost, Übergang, Mild) gespeichert.
   2. **User-Trigger:** Ändert der Nutzer Soll-Hz oder Solltemperatur, wird das gelernte Minimum verworfen – die Anlage darf wieder testen und neu lernen.
   3. **Wetter-Delta-Trigger (Standard: $\ge 5\,\text{K}$):** Ändert sich die Außentemperatur spürbar, wird die Mindestmodulation automatisch zur Re-Validierung freigegeben (in Optionen anpassbar).
-  4. **Soft Probing (Standard: 240 min):** Läuft die Anlage über längere Zeit stabil auf Mindestmodulation, tastet sich der Regler behutsam 1 Hz tiefer vor, um ungenutztes Modulationspotenzial zu heben (in Optionen anpassbar).
+  4. **Einstellbare Untergrenze je Zone:** Die Mindest-Hz je Außenzone (Standard Frost 24 / Übergang 18 / Mild 14 Hz) sind in den Optionen einstellbar und dienen als Start-, Reset- und Untergrenze. Läuft deine Anlage stabil tiefer, trage hier den gemessenen Wert ein.
+  5. **Soft Probing (Standard: 240 min):** Läuft die Anlage über längere Zeit stabil auf Mindestmodulation, tastet sich der Regler behutsam 1 Hz tiefer vor, um ungenutztes Modulationspotenzial zu heben (in Optionen anpassbar).
 * **Selbstlernende Reaktionszeit & Verstärkung:** Ermittelt dynamisch aus echten Sprungantworten der Anlage die Totzeit und den Hz-Sprung je 0,1 K. Ein manuelles Einstellen von Reaktionszeiten oder Regelverstärkungen entfällt.
 * **Momentum-Erkennung (Trend-Entkopplung):** Bewegt sich der Kompressor bereits dynamisch auf das Ziel zu, wartet der Regler geduldig ab und verhindert überhastetes Nachlegen.
 * **Vollständige Abtau- & Post-Defrost-Behandlung:** Erkennt Abtauzyklen (über `hvac_action` oder Sensor), friert den Zustand ein und wartet nach Ende des Abtauens eine 240-sekündige Haltephase ab, bevor geregelt wird. Die Haltephase erscheint als eigener Status `post_defrost`.
 * **Wetterabhängiges 2D-Arbeitspunkt-Lernen:** Lernt den nötigen Grund-Offset getrennt nach Außentemperaturzonen (Frost `< 2 °C`, Übergang `2–10 °C`, Mild `> 10 °C`) und Frequenzbereichen.
 * **Thermischer Überhitzungsschutz:** Drosselt die Frequenz sanft, wenn die tatsächliche Raumtemperatur die Solltemperatur um mehr als z. B. 1,0 K überschreitet.
+* **Kein Neustart bei warmem Raum:** Steht der Kompressor und der echte Raum liegt noch bei oder über Soll (plus einstellbarem Abstand), schiebt der Regler die Anlage nicht sofort wieder an, sondern sendet Soll +0,3 K (Status `restart_wait`). Erst wenn der Raum abgekühlt ist, wird angeschoben. Der Stopp wird dabei nicht als Mindestmodulation gelernt. Gilt nur mit konfiguriertem Raumsensor.
 * **Echte Raumtemperatur durchreichen:** Ist der Regler aus (oder die Anlage heizt nicht), gibt der erzeugte Sensor die echte Raumtemperatur 1:1 weiter – die Anlage rechnet dann weiter mit deinem Raumthermometer statt mit ihrem oft zu warmen Deckensensor.
-* **Minimale Konfiguration:** Keine Notbremse oder Dutzende verwirrende Parameter mehr – das Feintuning übernimmt der Algorithmus selbst! In den Optionen sind nur noch Totband (Standard 2 Hz), Sicherheitsgrenzen sowie Wettertrigger ($\ge 5\,\text{K}$) und Soft-Probing-Intervall (240 min) konfigurierbar.
+* **Minimale Konfiguration:** Keine Notbremse oder Dutzende verwirrende Parameter mehr – das Feintuning übernimmt der Algorithmus selbst! In den Optionen sind nur noch Totband (Standard 2 Hz), Mindest-Hz je Außenzone (24/18/14 Hz), Neustart-Abstand, Sicherheitsgrenzen sowie Wettertrigger ($\ge 5\,\text{K}$) und Soft-Probing-Intervall (240 min) konfigurierbar.
 
 ## Installation
 
@@ -50,7 +54,7 @@ Alles lässt sich später ändern: Integration → *Konfigurieren* → „Entit�
 | `switch` Hz-Regelung | Regler ein/aus |
 | `button` Mindest-Hz zurücksetzen | Setzt nur die erlernte Mindestmodulation der Außentemperaturzonen auf die Basiswerte zurück (z. B. zum manuellen Neu-Testen) |
 | `button` Gelernte Werte zurücksetzen | Setzt alle Lerntabellen (Arbeitspunkt-Offsets, Mindestmodulation, Reaktionszeit) vollständig auf Werkseinstellungen zurück |
-| Diagnose-Sensoren | Status (inkl. `defrost`, `post_defrost`, `overheat` und `min_mod`), Offset, gelernter Offset, Frequenzabweichung, erlernte Mindestmodulation |
+| Diagnose-Sensoren | Status (inkl. `defrost`, `post_defrost`, `restart_wait`, `overheat` und `min_mod`), Offset, gelernter Offset, Frequenzabweichung, erlernte Mindestmodulation |
 
 Beispiel für eine eigene Automation (z. B. PV-Logik):
 
@@ -90,9 +94,6 @@ Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und
 ## Logo / Branding
 
 Die Logos liegen im Ordner `custom_components/ac_pid_frequency/brand/` (`icon`, `logo`, jeweils `dark_` und `@2x`). Ab **Home Assistant 2026.3** werden sie von dort automatisch genutzt – ohne Eintrag im brands-Repository. Im Repository-Root liegen `icon.png` und `logo.png` für HACS/GitHub, unter `assets/` das Banner (`banner.png`, auch als `social-preview.png` für die GitHub-Repo-Einstellungen) und die SVG-Quellen.
-
-<img width="618" height="648" alt="grafik" src="https://github.com/user-attachments/assets/0ff46c94-34db-4c5c-af00-0d7adebd3ac7" />
-
 
 ## Entwicklung / Tests
 

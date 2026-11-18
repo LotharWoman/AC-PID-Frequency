@@ -21,6 +21,10 @@ CONF_INDOOR_UNITS = "indoor_units"  # weitere Innengeräte (nur Anzeige)
 CONF_INTERVAL = "interval_s"
 CONF_FAULT_TIMEOUT = "fault_timeout_min"
 CONF_DEADBAND = "deadband_hz"
+CONF_MIN_HZ_COLD = "min_hz_cold"
+CONF_MIN_HZ_NORMAL = "min_hz_normal"
+CONF_MIN_HZ_WARM = "min_hz_warm"
+CONF_RESTART_MARGIN = "restart_margin_k"
 CONF_MAX_OFFSET = "max_offset"
 CONF_MAX_ROOM_OVERHEAT = "max_room_overheat"
 CONF_WEATHER_TRIGGER_DELTA = "weather_trigger_delta_k"
@@ -34,6 +38,10 @@ TUNING_DEFAULTS: dict[str, float] = {
     CONF_INTERVAL: 60.0,
     CONF_FAULT_TIMEOUT: DEFAULT_FAULT_TIMEOUT_MIN,
     CONF_DEADBAND: 2.0,
+    CONF_MIN_HZ_COLD: 24.0,
+    CONF_MIN_HZ_NORMAL: 18.0,
+    CONF_MIN_HZ_WARM: 14.0,
+    CONF_RESTART_MARGIN: 0.0,
     CONF_MAX_OFFSET: 2.0,
     CONF_MAX_ROOM_OVERHEAT: 1.0,
     CONF_WEATHER_TRIGGER_DELTA: 5.0,
@@ -51,6 +59,7 @@ STATUS_WAITING = "waiting"  # Eingangsdaten fehlen, letzter Wert wird gehalten
 STATUS_FAULT = "fault"  # Eingangsdaten fehlen zu lange, Sensor ist unavailable
 STATUS_DEFROST = "defrost"  # Abtauen aktiv
 STATUS_POST_DEFROST = "post_defrost"  # Haltephase nach dem Abtauen
+STATUS_RESTART_WAIT = "restart_wait"  # Kompressor aus, Raum noch zu warm: kein Neustart-Anschub
 STATUS_OVERHEAT = "overheat"  # Raum überhitzt, thermischer Schutz aktiv
 STATUS_MIN_MOD = "min_mod"  # Ziel liegt unter erreichbarer Mindestmodulation, stabil gehalten
 
@@ -64,6 +73,7 @@ STATUSES = [
     STATUS_DEFROST,
     STATUS_POST_DEFROST,
     STATUS_OVERHEAT,
+    STATUS_RESTART_WAIT,
     STATUS_WAITING,
     STATUS_FAULT,
 ]

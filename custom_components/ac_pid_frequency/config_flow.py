@@ -18,6 +18,10 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_CLIMATE,
     CONF_DEADBAND,
+    CONF_MIN_HZ_COLD,
+    CONF_MIN_HZ_NORMAL,
+    CONF_MIN_HZ_WARM,
+    CONF_RESTART_MARGIN,
     CONF_DEFROST,
     CONF_FREQUENCY,
     CONF_INDOOR_UNITS,
@@ -38,6 +42,10 @@ FREQUENCY_DOMAINS = ["sensor", "number", "input_number"]
 # (Schlüssel, min, max, Schritt, Einheit) – auf das absolut notwendige Minimum reduziert
 TUNING_FIELDS: list[tuple[str, float, float, float, str]] = [
     (CONF_DEADBAND, 0.5, 10.0, 0.5, "Hz"),
+    (CONF_MIN_HZ_COLD, 10, 60, 1, "Hz"),
+    (CONF_MIN_HZ_NORMAL, 10, 60, 1, "Hz"),
+    (CONF_MIN_HZ_WARM, 10, 60, 1, "Hz"),
+    (CONF_RESTART_MARGIN, 0.0, 3.0, 0.1, "K"),
     (CONF_MAX_OFFSET, 0.5, 5.0, 0.1, "K"),
     (CONF_MAX_ROOM_OVERHEAT, 0.2, 5.0, 0.1, "K"),
     (CONF_WEATHER_TRIGGER_DELTA, 1.0, 15.0, 0.5, "K"),
