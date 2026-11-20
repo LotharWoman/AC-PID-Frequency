@@ -401,9 +401,9 @@ class AcPidFrequencyController:
         self.output = self.offset = self.error_hz = None
         self.status = status
         self._fault_since = None
-        self.regelung.hz_prev1 = self.regelung.hz_prev2 = None
-        # Nach Pause/Aus nicht aus einem alten Wert lernen (z. B. Kompressor-Stopp beim Abschalten)
-        self.regelung.last_running_hz = None
+        # Nach Pause/Aus nicht aus alten Beobachtungen lernen (z. B. Kompressor-Stopp beim
+        # Abschalten oder die Reaktion auf einen Schritt vor der Pause)
+        self.regelung.reset_observation()
 
     def _handle_missing_data(self) -> None:
         """Eingangsdaten fehlen: erst Wert halten, nach Zeitlimit unavailable."""
@@ -422,6 +422,6 @@ class AcPidFrequencyController:
             self.passthrough = False
             self.output = self.offset = self.error_hz = None
             self.status = STATUS_FAULT
-            self.regelung.hz_prev1 = self.regelung.hz_prev2 = None
+            self.regelung.reset_observation()
         else:
             self.status = STATUS_WAITING

@@ -457,6 +457,17 @@ async def test_pause_forgets_last_running_hz(hass: HomeAssistant) -> None:
     assert ctrl.regelung.last_running_hz is None
 
 
+async def test_pause_discards_pending_step_observation(hass: HomeAssistant) -> None:
+    entry = await _setup(hass, hz="40")
+    ctrl = entry.runtime_data
+    ctrl.regelung.last_step_delta = -0.1
+    ctrl.regelung.hz_at_last_step = 25.0
+    hass.states.async_set(CLIMATE, "off", {"temperature": 21.0})
+    await _tick(hass, 60)
+    assert ctrl.regelung.last_step_delta == 0.0
+    assert ctrl.regelung.hz_at_last_step is None
+
+
 async def test_restart_wait_while_room_warm_then_restart_push(hass: HomeAssistant) -> None:
     entry = await _setup(hass, hz="0", room="22.5")  # Soll 21,0, Raum zu warm, Kompressor steht
     status = _eid(hass, entry, "sensor", "status")

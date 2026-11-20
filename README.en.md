@@ -15,18 +15,19 @@ It works with any AC whose integration accepts an external room sensor (a Home A
 * **Dynamic 5-pillar system for minimum modulation & shut-off protection:**
   If the target Hz is below the achievable minimum modulation (or the AC switches off), the controller catches the AC with a targeted cold offset and holds it stably at the minimum. Because the physical minimum modulation varies with weather and setpoint, the controller validates it dynamically using 5 pillars:
   1. **Weather zone separation:** Learned minimum Hz are stored separately per outdoor temperature zone (frost, transition, mild).
-  2. **User trigger:** If the user changes the target Hz or the setpoint, the learned minimum is discarded: the AC may test and learn again.
+  2. **User trigger:** If the user changes the setpoint, or sets the target Hz below the learned minimum, the learned minimum is discarded: the AC may test and learn again. A new target above the minimum (e.g. changing targets from PV logic) leaves it untouched.
   3. **Weather delta trigger (default: $\ge 5\,\text{K}$):** If the outdoor temperature changes noticeably, the minimum modulation is released for re-validation automatically (adjustable in the options).
   4. **Adjustable limit per zone:** The minimum Hz per outdoor zone (default frost 24 / transition 18 / mild 14 Hz) are adjustable in the options and serve as start value, reset value and lower limit. If your unit runs stably lower, enter the measured value there.
   5. **Soft probing (default: 240 min):** If the AC runs stably at minimum modulation for a long time, the controller carefully probes 1 Hz lower to unlock unused modulation potential (adjustable in the options).
 * **Self-learning reaction time & gain:** Determines dead time and Hz change per 0.1 K dynamically from real step responses of the AC. Manual tuning of reaction times or gains is not needed.
+* **Feed-forward on large target jumps:** If the target frequency changes by at least 4 Hz, the controller immediately shifts the sensor value by 60 % of the distance expected from the learned gain (at most 1.0 K). The normal control loop then trims the rest in small steps. This shortens settling noticeably after large jumps; for small changes, during defrost, with a stopped compressor or when the compressor is already accelerating strongly, nothing changes.
 * **Momentum detection (trend decoupling):** If the compressor is already moving towards the target, the controller waits patiently and avoids over-hasty corrections.
 * **Complete defrost & post-defrost handling:** Detects defrost cycles (via `hvac_action` or a sensor), freezes the state and, after the defrost ends, waits through a 240-second hold phase before regulating again. The hold phase shows up as its own status `post_defrost`.
 * **Weather-dependent 2D operating point learning:** Learns the required base offset separately per outdoor temperature zone (frost `< 2 °C`, transition `2–10 °C`, mild `> 10 °C`) and frequency range.
 * **Thermal overheat protection:** Throttles the frequency gently if the actual room temperature exceeds the setpoint by more than, for example, 1.0 K.
 * **No restart while the room is warm:** If the compressor is stopped and the real room is still at or above the setpoint (plus an adjustable margin), the controller does not push the AC to restart immediately. It sends setpoint +0.3 K instead (status `restart_wait`). The restart push only follows once the room has cooled down. The stop is not learned as minimum modulation. Only applies with a configured room sensor.
 * **Pass through the real room temperature:** When the controller is off (or the AC is not heating), the generated sensor passes the real room temperature on 1:1, so the AC keeps using your room thermometer instead of its often too warm ceiling sensor.
-* **Minimal configuration:** No emergency brake or dozens of confusing parameters: the algorithm takes care of the fine tuning. The options only contain deadband (default 2 Hz), minimum Hz per outdoor zone (24/18/14 Hz), restart margin, safety limits, the weather trigger ($\ge 5\,\text{K}$) and the soft probing interval (240 min).
+* **Minimal configuration:** No emergency brake or dozens of confusing parameters: the algorithm takes care of the fine tuning. The options only contain deadband (default 2 Hz), minimum Hz per outdoor zone (24/18/14 Hz), restart margin, safety limits, the weather trigger ($\ge 5\,\text{K}$) and the soft probing interval (240 min). The control cycle (60 s) and the fault timeout (10 min) are fixed presets.
 
 ## Installation
 
@@ -37,7 +38,7 @@ It works with any AC whose integration accepts an external room sensor (a Home A
    * **Master climate entity** (required)
    * **Compressor frequency** (required)
    * **Outdoor temperature** (optional: sensor or weather entity)
-   * **Real room temperature sensor** (optional: overheat protection, pass-through while regulation is off and the restart hold)
+   * **Real room temperature sensor** (optional: overheat protection, pass-through while regulation is off and the restart hold). Without it, the overheat protection uses the `current_temperature` attribute of the climate entity. If the AC reports the simulated value there (e.g. ProtoArt), it cannot detect real overheating – please enter a real room sensor in that case.
    * **Defrost sensor** (optional: binary sensor or sensor)
    * **Additional indoor units** (optional: display only)
 4. In the AC's own integration, enter the generated sensor **"Simulated room temperature"** as the external room sensor.
@@ -50,7 +51,7 @@ Everything can be changed later: integration → *Configure* → "Change entitie
 | Entity | Purpose |
 |---|---|
 | `sensor` Simulated room temperature | Value for the AC (0.1 K). Controller off or AC not heating: **the real room temperature is passed through** (offset 0.0 K, changes immediately). Becomes **`unavailable`** if the room sensor is then missing or none is configured, or if data is missing for too long while regulating → the AC uses its own indoor sensor |
-| `number` Target frequency | Desired compressor Hz. Input is limited downwards to the learned minimum modulation. Your own automations write here (e.g. PV logic) |
+| `number` Target frequency | Desired compressor Hz (allowed 10 to 120 Hz). If the target is below the learned minimum modulation, the controller regulates to that minimum internally; only the card already limits the input downwards. Your own automations write here (e.g. PV logic) |
 | `switch` Hz control | Controller on/off |
 | `button` Reset minimum Hz | Resets only the learned minimum modulation of the outdoor zones to the configured base values (e.g. to re-test manually) |
 | `button` Reset learned values | Resets all learning tables (operating point offsets, minimum modulation, reaction time) to factory settings |
@@ -105,5 +106,3 @@ python -m pytest
 ## Example: Markdown card with a status overview
 
 `examples/markdown-card.yaml` shows frequency, temperatures, sent temperature, phase and learned experience value as tables. Only the status sensor entity in the first template line needs to be adapted; the template reads everything else from its attributes.
-
-<img width="618" height="648" alt="grafik" src="https://github.com/user-attachments/assets/ceb69d53-bb90-4768-9e3c-f38656d51576" />

@@ -7,13 +7,15 @@ Besonderheiten dieses Algorithmus:
   und Verstärkung (Hz/K) der Klimaanlage aus ihren echten Sprungantworten.
 * Momentum-Erkennung (Trend): Bewegt sich die Frequenz bereits mit genügend Dynamik
   in Richtung Ziel, wird geduldig abgewartet statt vorzeitig nachzulegen.
-* Dynamische Mindestmodulations-Erkennung & Abschaltschutz (4-Säulen-Prinzip):
+* Dynamische Mindestmodulations-Erkennung & Abschaltschutz (5-Säulen-Prinzip):
   1. Wetterzonen-Trennung (2D-Minimum je Außentemperaturbereich).
-  2. User-Trigger: Bei Änderung von Soll-Hz oder Soll-Temperatur wird das gelernte
-     Minimum freigegeben, sodass die Anlage neu testen darf.
+  2. User-Trigger: Bei Änderung der Soll-Temperatur oder wenn das neue Ziel-Hz unter
+     dem gelernten Minimum liegt, wird das gelernte Minimum freigegeben, sodass die
+     Anlage neu testen darf. Ein neues Ziel oberhalb des Minimums lässt es unberührt.
   3. Wetter-Delta-Trigger (Standard >= 5 K Änderung): Gibt bei deutlichem Wetterwechsel
      die Mindestmodulation automatisch zur Re-Validierung frei.
-  4. Soft Probing (Standard 240 min): Nach 4 Stunden stabiler Mindestmodulation testet
+  4. Einstellbare Untergrenze je Zone: Start-, Rücksetz- und Untergrenzwert der Mindest-Hz.
+  5. Soft Probing (Standard 240 min): Nach 4 Stunden stabiler Mindestmodulation testet
      der Regler sanft, ob der Kompressor inzwischen tiefer mitgehen kann.
   Liegt die Soll-Hz unterhalb der Mindestmodulation, wird die Anlage stabil gehalten
   und gegen Thermo-Off (Ausgehen) geschützt.
@@ -25,6 +27,10 @@ Besonderheiten dieses Algorithmus:
   den passenden Grund-Offset und speichert ihn dauerhaft.
 * Thermischer Überhitzungsschutz:
   Drosselt die Frequenz sanft, wenn der reale Raum zu warm wird.
+* Vorsteuerung bei großen Zielsprüngen:
+  Ändert sich das Ziel-Hz um mindestens FF_MIN_JUMP_HZ, wird der Ausgang sofort um einen
+  Teil (FF_GAIN) der aus der erlernten Verstärkung erwarteten Strecke verschoben. Den Rest
+  übernimmt die normale Regelung in kleinen Schritten.
 """
 
 from __future__ import annotations
@@ -32,6 +38,12 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass, field
+
+
+# Vorsteuerung bei Zielsprüngen
+FF_GAIN = 0.6           # Anteil der erwarteten Strecke, der sofort gestellt wird (Rest: Regelung)
+FF_MAX_K = 1.0          # K, größte Vorsteuerung je Zielsprung
+FF_MIN_JUMP_HZ = 4.0    # Hz, kleinere Zielsprünge regelt der normale Schrittbetrieb
 
 
 def round1(value: float) -> float:
@@ -236,6 +248,23 @@ class State:
     def learned_min_offset(self, val: float) -> None:
         self.learned_min_offset_table[self.current_outdoor_bin] = val
 
+    def reset_observation(self) -> None:
+        """Verwirft laufende Beobachtungen (nach Pause, Aus oder Störung).
+
+        Gelernte Werte und die letzte Ausgabe bleiben erhalten. Eine alte Schrittbeobachtung
+        darf nach dem Wiedereinschalten nicht mehr ausgewertet werden, sonst würde eine
+        Frequenzänderung durch das Wiederanlaufen als Reaktion auf einen alten Schritt
+        gewertet und die Verstärkung falsch gelernt.
+        """
+        self.hz_prev1 = None
+        self.hz_prev2 = None
+        self.trend = 0.0
+        self.last_step_delta = 0.0
+        self.hz_at_last_step = None
+        self.was_defrosting = False
+        self.post_defrost_remaining = 0.0
+        self.last_running_hz = None
+
     def reset_learning(self, min_hz_defaults: dict | None = None) -> None:
         """Setzt alle gelernten Tabellen und Anlageneigenschaften auf Werkseinstellungen zurück."""
         self.learned_table = copy.deepcopy(DEFAULT_LEARNED_OFFSETS)
@@ -376,14 +405,59 @@ def step(
         s.last_setpoint is not None and abs(setpoint - s.last_setpoint) >= 0.2
     )
 
+    # Liegt das neue Ziel unter dem gelernten Minimum, darf die Anlage neu testen. Ein Ziel
+    # oberhalb des Minimums entwertet es nicht (z. B. PV-Logik mit wechselnden Zielen).
+    target_under_min = user_changed_target and target_hz < s.learned_min_table.get(
+        outdoor_bin, p.default_min_hz(outdoor_bin)
+    )
+    jump_hz = abs(target_hz - s.last_target_hz) if s.last_target_hz is not None else 0.0
+
     if user_changed_target or user_changed_setpoint:
-        # Mindestmodulation für diese Zone zurücksetzen, damit die Anlage aktiv neu testen darf
-        # und ruhig einmalig ausgehen kann zum Neulernen
-        s.learned_min_table[outdoor_bin] = p.default_min_hz(outdoor_bin)
+        if user_changed_setpoint or target_under_min:
+            # Mindestmodulation für diese Zone zurücksetzen, damit die Anlage aktiv neu testen darf
+            # und ruhig einmalig ausgehen kann zum Neulernen
+            s.learned_min_table[outdoor_bin] = p.default_min_hz(outdoor_bin)
         s.min_mod_steady_seconds = 0.0
         s.low_hz_stagnation_count = 0
         s.stable_cycles = 0
         s.time_since_last_step = s.learned_reaction_time
+
+    # Vorsteuerung: Bei einem großen Zielsprung den Ausgang sofort um einen Teil der erwarteten
+    # Strecke verschieben. Den Rest holt die normale Regelung in kleinen Schritten nach.
+    if (
+        user_changed_target
+        and jump_hz >= FF_MIN_JUMP_HZ
+        and s.output is not None
+        and hz > 1.0
+        and not defrost
+        and not s.was_defrosting
+        and s.post_defrost_remaining <= 0.0
+    ):
+        eff_ff = max(s.learned_min_hz, target_hz)
+        err_ff = eff_ff - hz
+        if s.hz_prev1 is not None:
+            momentum = (hz - s.hz_prev1) * (60.0 / max(5.0, p.interval_s))
+        else:
+            momentum = 0.0
+        # Läuft der Kompressor schon kräftig in Zielrichtung, nicht zusätzlich anschieben
+        already_moving = abs(momentum) >= 1.0 and (momentum > 0) == (err_ff > 0)
+        if abs(err_ff) >= 2.0 * p.deadband_hz and not already_moving:
+            dk = _clamp(
+                err_ff / max(5.0, s.learned_sensitivity) * FF_GAIN, -FF_MAX_K, FF_MAX_K
+            )
+            new_out = s.output - dk
+            if target_hz < s.learned_min_hz:
+                # Ziel unter der Mindestmodulation: nie wärmer als der sichere Halte-Offset
+                new_out = min(new_out, setpoint - max(0.0, s.learned_min_offset - 0.1))
+            new_out = _clamp(round1(new_out), low, high)
+            if round1(new_out) != round1(s.output):
+                s.output = new_out
+                s.time_since_last_step = 0.0  # Reaktion der Anlage abwarten
+                s.hz_prev1 = s.hz_prev2 = None
+                s.trend = 0.0
+                # Die große Vorsteuerung nicht als Einzelschritt in die Lernwerte einrechnen
+                s.last_step_delta = 0.0
+                s.hz_at_last_step = None
 
     s.last_setpoint = setpoint
     s.last_target_hz = target_hz

@@ -15,18 +15,19 @@ Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home
 * **Dynamisches 5-Säulen-System für Mindestmodulation & Abschaltschutz:**
   Liegt die Soll-Hz unterhalb der erreichbaren Mindestmodulation (oder schaltet die Anlage ab), fängt der Regler die Anlage sofort über einen gezielten Kälte-Offset ab und hält sie stabil auf dem Minimum. Weil die physikalische Mindestmodulation je nach Wetter und Sollwert variiert, prüft der Regler die Gültigkeit dynamisch über 5 Säulen:
   1. **Wetterzonen-Trennung:** Erlernte Min-Hz werden getrennt nach Außentemperaturzonen (Frost, Übergang, Mild) gespeichert.
-  2. **User-Trigger:** Ändert der Nutzer Soll-Hz oder Solltemperatur, wird das gelernte Minimum verworfen – die Anlage darf wieder testen und neu lernen.
+  2. **User-Trigger:** Ändert der Nutzer die Solltemperatur oder setzt er die Soll-Hz unter das gelernte Minimum, wird das gelernte Minimum verworfen – die Anlage darf wieder testen und neu lernen. Ein neues Ziel oberhalb des Minimums (z. B. wechselnde Ziele einer PV-Logik) lässt es unberührt.
   3. **Wetter-Delta-Trigger (Standard: $\ge 5\,\text{K}$):** Ändert sich die Außentemperatur spürbar, wird die Mindestmodulation automatisch zur Re-Validierung freigegeben (in Optionen anpassbar).
   4. **Einstellbare Untergrenze je Zone:** Die Mindest-Hz je Außenzone (Standard Frost 24 / Übergang 18 / Mild 14 Hz) sind in den Optionen einstellbar und dienen als Start-, Reset- und Untergrenze. Läuft deine Anlage stabil tiefer, trage hier den gemessenen Wert ein.
   5. **Soft Probing (Standard: 240 min):** Läuft die Anlage über längere Zeit stabil auf Mindestmodulation, tastet sich der Regler behutsam 1 Hz tiefer vor, um ungenutztes Modulationspotenzial zu heben (in Optionen anpassbar).
 * **Selbstlernende Reaktionszeit & Verstärkung:** Ermittelt dynamisch aus echten Sprungantworten der Anlage die Totzeit und den Hz-Sprung je 0,1 K. Ein manuelles Einstellen von Reaktionszeiten oder Regelverstärkungen entfällt.
+* **Vorsteuerung bei großen Zielsprüngen:** Ändert sich die Ziel-Frequenz um mindestens 4 Hz, verschiebt der Regler den Sensorwert sofort um 60 % der aus der erlernten Verstärkung erwarteten Strecke (höchstens 1,0 K). Den Rest holt die normale Regelung in kleinen Schritten nach. Das verkürzt das Einregeln bei großen Sprüngen deutlich; bei kleinen Änderungen, laufendem Abtauen, stehendem Kompressor oder bereits kräftig anlaufendem Kompressor bleibt alles wie bisher.
 * **Momentum-Erkennung (Trend-Entkopplung):** Bewegt sich der Kompressor bereits dynamisch auf das Ziel zu, wartet der Regler geduldig ab und verhindert überhastetes Nachlegen.
 * **Vollständige Abtau- & Post-Defrost-Behandlung:** Erkennt Abtauzyklen (über `hvac_action` oder Sensor), friert den Zustand ein und wartet nach Ende des Abtauens eine 240-sekündige Haltephase ab, bevor geregelt wird. Die Haltephase erscheint als eigener Status `post_defrost`.
 * **Wetterabhängiges 2D-Arbeitspunkt-Lernen:** Lernt den nötigen Grund-Offset getrennt nach Außentemperaturzonen (Frost `< 2 °C`, Übergang `2–10 °C`, Mild `> 10 °C`) und Frequenzbereichen.
 * **Thermischer Überhitzungsschutz:** Drosselt die Frequenz sanft, wenn die tatsächliche Raumtemperatur die Solltemperatur um mehr als z. B. 1,0 K überschreitet.
 * **Kein Neustart bei warmem Raum:** Steht der Kompressor und der echte Raum liegt noch bei oder über Soll (plus einstellbarem Abstand), schiebt der Regler die Anlage nicht sofort wieder an, sondern sendet Soll +0,3 K (Status `restart_wait`). Erst wenn der Raum abgekühlt ist, wird angeschoben. Der Stopp wird dabei nicht als Mindestmodulation gelernt. Gilt nur mit konfiguriertem Raumsensor.
 * **Echte Raumtemperatur durchreichen:** Ist der Regler aus (oder die Anlage heizt nicht), gibt der erzeugte Sensor die echte Raumtemperatur 1:1 weiter – die Anlage rechnet dann weiter mit deinem Raumthermometer statt mit ihrem oft zu warmen Deckensensor.
-* **Minimale Konfiguration:** Keine Notbremse oder Dutzende verwirrende Parameter mehr – das Feintuning übernimmt der Algorithmus selbst! In den Optionen sind nur noch Totband (Standard 2 Hz), Mindest-Hz je Außenzone (24/18/14 Hz), Neustart-Abstand, Sicherheitsgrenzen sowie Wettertrigger ($\ge 5\,\text{K}$) und Soft-Probing-Intervall (240 min) konfigurierbar.
+* **Minimale Konfiguration:** Keine Notbremse oder Dutzende verwirrende Parameter mehr – das Feintuning übernimmt der Algorithmus selbst! In den Optionen sind nur noch Totband (Standard 2 Hz), Mindest-Hz je Außenzone (24/18/14 Hz), Neustart-Abstand, Sicherheitsgrenzen sowie Wettertrigger ($\ge 5\,\text{K}$) und Soft-Probing-Intervall (240 min) konfigurierbar. Regeltakt (60 s) und Störungs-Timeout (10 min) sind fest voreingestellt.
 
 ## Installation
 
@@ -37,7 +38,7 @@ Funktioniert mit jeder Anlage, deren Integration einen externen Raumsensor (Home
    * **Master-Klimaanlage** (Pflicht)
    * **Kompressor-Frequenz** (Pflicht)
    * **Außentemperatur** (optional: Sensor oder Wetter-Entität)
-   * **Echter Raumtemperatursensor** (optional: Überhitzungsschutz und Durchreichen bei ausgeschalteter Regelung)
+   * **Echter Raumtemperatursensor** (optional: Überhitzungsschutz, Durchreichen bei ausgeschalteter Regelung und Neustart-Halten bei warmem Raum). Ohne ihn nutzt der Überhitzungsschutz das Attribut `current_temperature` der Klimaanlage. Meldet die Anlage dort den simulierten Wert zurück (z. B. ProtoArt), kann er eine echte Überhitzung nicht erkennen – dann bitte einen echten Raumsensor angeben.
    * **Abtau-Sensor** (optional: Binary Sensor oder Sensor)
    * **Weitere Innengeräte** (optional: nur Anzeige)
 4. In der Integration der Klimaanlage den erzeugten Sensor **„Simulierte Raumtemperatur“** als externen Raumsensor eintragen.
@@ -50,7 +51,7 @@ Alles lässt sich später ändern: Integration → *Konfigurieren* → „Entit�
 | Entität | Zweck |
 |---|---|
 | `sensor` Simulierte Raumtemperatur | Wert für die Anlage (0,1 K). Regler aus oder Anlage heizt nicht: **echte Raumtemperatur wird durchgereicht** (Offset 0,0 K, Änderungen sofort). **Wird `unavailable`**, wenn dann der Raumsensor fehlt bzw. keiner konfiguriert ist oder wenn bei laufender Regelung Daten zu lange fehlen → die Anlage nutzt ihren eigenen Innensensor |
-| `number` Ziel-Frequenz | Gewünschte Kompressor-Hz. Eingabe ist auf die erlernte Mindestmodulation nach unten begrenzt. Hier schreiben eigene Automationen hinein (z. B. PV-Logik) |
+| `number` Ziel-Frequenz | Gewünschte Kompressor-Hz (zulässig 10 bis 120 Hz). Liegt das Ziel unter der erlernten Mindestmodulation, regelt der Regler intern auf diese; nur die Karte begrenzt die Eingabe schon nach unten. Hier schreiben eigene Automationen hinein (z. B. PV-Logik) |
 | `switch` Hz-Regelung | Regler ein/aus |
 | `button` Mindest-Hz zurücksetzen | Setzt nur die erlernte Mindestmodulation der Außentemperaturzonen auf die Basiswerte zurück (z. B. zum manuellen Neu-Testen) |
 | `button` Gelernte Werte zurücksetzen | Setzt alle Lerntabellen (Arbeitspunkt-Offsets, Mindestmodulation, Reaktionszeit) vollständig auf Werkseinstellungen zurück |
@@ -105,6 +106,3 @@ python -m pytest
 ## Beispiel: Markdown-Karte mit Statusübersicht
 
 `examples/markdown-card.yaml` zeigt Frequenz, Temperaturen, Sendetemperatur, Phase und gelernten Erfahrungswert als Tabellen. Nur die Entität des Status-Sensors in der ersten Template-Zeile muss angepasst werden, alles andere liest das Template aus dessen Attributen.
-
-<img width="618" height="648" alt="grafik" src="https://github.com/user-attachments/assets/e0286868-f677-4a22-9d9d-a621f077ff67" />
-

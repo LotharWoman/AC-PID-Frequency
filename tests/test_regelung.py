@@ -202,9 +202,10 @@ def test_probing_and_reset_respect_configured_zone_floor():
     p = Params(min_hz_normal=12.0, probe_interval_min=1.0, interval_s=60.0)
     s = State()
     s.learned_min_table = {**p.min_hz_map(), "normal": 14.0}
-    # User-Trigger setzt auf die eingestellte Untergrenze (12), nicht auf 18
-    step(p, s, setpoint=21.0, hz=14.0, target_hz=14.0, outdoor_temp=6.0)
+    # User-Trigger (neues Ziel unter dem gelernten Minimum 14) setzt auf die eingestellte
+    # Untergrenze (12), nicht auf 18
     step(p, s, setpoint=21.0, hz=14.0, target_hz=20.0, outdoor_temp=6.0)
+    step(p, s, setpoint=21.0, hz=14.0, target_hz=13.0, outdoor_temp=6.0)
     assert s.learned_min_table["normal"] == 12.0
 
 
@@ -339,3 +340,170 @@ def test_soft_probing_decreases_min_hz_after_interval():
     # Erlernte Mindest-Hz wurde um 1 Hz abgesenkt zum Antasten
     assert s.learned_min_hz == 24.0
     assert s.min_mod_steady_seconds == 0.0
+
+
+def test_user_trigger_keeps_learned_min_hz_when_new_target_is_above_it():
+    """Ein neues Ziel oberhalb des gelernten Minimums entwertet es nicht (PV-Logik)."""
+    s = State()
+    s.learned_min_table[OUTDOOR_BIN_NORMAL] = 26.0
+    s.last_target_hz = 22.0
+    p = Params()
+    # Ziel springt von 22 auf 40 Hz, das gelernte Minimum (26 Hz) bleibt gültig
+    step(p, s, setpoint=21.0, hz=26.0, target_hz=40.0, outdoor_temp=8.0)
+    assert s.learned_min_hz == 26.0
+
+
+def _ff_state(output=20.7, last_target=30.0, sensitivity=15.0):
+    """Eingeschwungener Regler (Ausgabe gesetzt), Ziel zuletzt bei last_target."""
+    s = State()
+    s.output = output
+    s.last_target_hz = last_target
+    s.last_setpoint = 21.0
+    s.learned_sensitivity = sensitivity
+    return s
+
+
+def test_feed_forward_moves_output_on_large_target_increase():
+    """Großer Zielsprung nach oben: Ausgang sofort um 60 % der erwarteten Strecke kälter."""
+    s = _ff_state()
+    p = Params()
+    # Fehler 16 Hz / 15 Hz je K * 0,6 = 0,64 K -> 20,7 - 0,64 = 20,06 -> 20,1
+    res = step(p, s, setpoint=21.0, hz=30.0, target_hz=46.0, outdoor_temp=8.0)
+    assert res.published == 20.1
+    # Danach wird die Reaktion der Anlage abgewartet, kein weiterer Schritt im selben Takt
+    assert s.time_since_last_step == 0.0
+
+
+def test_feed_forward_moves_output_on_large_target_decrease():
+    s = _ff_state(output=20.0, last_target=46.0)
+    p = Params()
+    # Fehler -16 Hz -> 0,64 K wärmer: 20,0 + 0,64 = 20,64 -> 20,6
+    res = step(p, s, setpoint=21.0, hz=46.0, target_hz=30.0, outdoor_temp=8.0)
+    assert res.published == 20.6
+
+
+def test_feed_forward_is_limited_to_one_kelvin():
+    s = _ff_state(sensitivity=6.0)
+    p = Params()
+    # Rechnerisch 60 Hz / 6 * 0,6 = 6 K -> begrenzt auf 1,0 K
+    res = step(p, s, setpoint=21.0, hz=20.0, target_hz=80.0, outdoor_temp=8.0)
+    assert res.published == 19.7
+
+
+def test_no_feed_forward_for_small_target_change():
+    """Zielsprünge unter 4 Hz regelt der normale Schrittbetrieb (0,1 K)."""
+    s = _ff_state()
+    p = Params()
+    res = step(p, s, setpoint=21.0, hz=30.0, target_hz=33.0, outdoor_temp=8.0)
+    assert res.published == 20.6
+
+
+def test_no_feed_forward_when_error_within_two_deadbands():
+    """Hat die Frequenz das neue Ziel praktisch schon erreicht, bleibt der Ausgang."""
+    s = _ff_state()
+    p = Params()
+    res = step(p, s, setpoint=21.0, hz=33.0, target_hz=35.0, outdoor_temp=8.0)
+    assert res.published == 20.7
+
+
+def test_no_feed_forward_when_compressor_already_accelerating():
+    """Läuft der Kompressor schon kräftig in Zielrichtung, wird nicht zusätzlich angeschoben."""
+    s = _ff_state()
+    s.hz_prev1 = 20.0
+    p = Params()
+    res = step(p, s, setpoint=21.0, hz=28.0, target_hz=46.0, outdoor_temp=8.0)
+    assert res.published == 20.7
+
+
+def test_no_feed_forward_during_defrost():
+    s = _ff_state()
+    p = Params()
+    res = step(p, s, setpoint=21.0, hz=30.0, target_hz=46.0, outdoor_temp=8.0, defrost=True)
+    assert res.mode == MODE_DEFROST
+    assert res.published == 20.7
+
+
+def test_no_feed_forward_without_previous_output():
+    """Erststart: der Basis-Ausgangswert kommt aus der Lerntabelle, nicht aus der Vorsteuerung."""
+    s = State()
+    s.last_target_hz = 30.0
+    p = Params()
+    res = step(p, s, setpoint=21.0, hz=30.0, target_hz=46.0, outdoor_temp=8.0)
+    # 46 Hz -> Bin mid_high (normal: 0,50 K) -> 20,5
+    assert res.published == 20.5
+
+
+def test_feed_forward_respects_safe_hold_offset_below_min_modulation():
+    """Ziel unter der Mindestmodulation: Vorsteuerung nie wärmer als der sichere Halte-Offset."""
+    p = Params(min_hz_normal=24.0)
+    s = _ff_state(output=20.0, last_target=48.0)
+    s.learned_min_table[OUTDOOR_BIN_NORMAL] = 24.0
+    s.learned_min_offset_table[OUTDOOR_BIN_NORMAL] = 0.4
+    # Rechnerisch 20,0 + 0,96 = 20,96, gedeckelt bei 21,0 - (0,4 - 0,1) = 20,7
+    res = step(p, s, setpoint=21.0, hz=48.0, target_hz=20.0, outdoor_temp=8.0)
+    assert res.published == 20.7
+
+
+def test_feed_forward_does_not_feed_learning_of_step_response():
+    """Die große Vorsteuerung darf nicht als 0,1-K-Schritt die Verstärkung verfälschen."""
+    s = _ff_state()
+    s.last_step_delta = -0.1
+    s.hz_at_last_step = 28.0
+    p = Params()
+    step(p, s, setpoint=21.0, hz=30.0, target_hz=46.0, outdoor_temp=8.0)
+    assert s.last_step_delta == 0.0
+    assert s.hz_at_last_step is None
+
+
+def test_reset_observation_clears_dynamics_but_keeps_learned_values():
+    """Nach Pause/Aus/Störung: Beobachtungen weg, Gelerntes und letzte Ausgabe bleiben."""
+    s = State()
+    s.output = 20.5
+    s.learned_sensitivity = 22.0
+    s.learned_reaction_time = 100.0
+    s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] = 0.7
+    s.last_step_delta = -0.1
+    s.hz_at_last_step = 25.0
+    s.hz_prev1, s.hz_prev2, s.trend = 24.0, 23.0, 3.0
+    s.was_defrosting = True
+    s.post_defrost_remaining = 120.0
+    s.last_running_hz = 30.0
+
+    s.reset_observation()
+
+    assert s.last_step_delta == 0.0 and s.hz_at_last_step is None
+    assert s.hz_prev1 is None and s.hz_prev2 is None and s.trend == 0.0
+    assert s.was_defrosting is False and s.post_defrost_remaining == 0.0
+    assert s.last_running_hz is None
+    assert s.output == 20.5
+    assert s.learned_sensitivity == 22.0 and s.learned_reaction_time == 100.0
+    assert s.learned_table[OUTDOOR_BIN_NORMAL][FREQ_BIN_MID_LOW] == 0.7
+
+
+def test_stale_step_observation_does_not_corrupt_gain_after_pause():
+    """Ohne Reset würde das Wiederanlaufen (25 -> 45 Hz) als Reaktion auf einen alten
+    0,1-K-Schritt gelernt und die Verstärkung von 15 auf ca. 43 Hz/K getrieben."""
+    s = State()
+    s.output = 20.5
+    s.time_since_last_step = 20.0
+    s.last_step_delta = -0.1
+    s.hz_at_last_step = 25.0
+    p = Params()
+
+    s.reset_observation()  # Pause/Aus
+    step(p, s, setpoint=21.0, hz=45.0, target_hz=46.0, outdoor_temp=8.0)
+
+    assert s.learned_sensitivity == 15.0
+    assert s.learned_reaction_time == 90.0
+
+
+def test_reset_observation_cancels_post_defrost_hold():
+    """Wurde während der Abtauung ausgeschaltet, gibt es nach dem Einschalten keine Haltephase."""
+    s = State()
+    s.output = 20.5
+    s.was_defrosting = True
+    s.post_defrost_remaining = 120.0
+    s.reset_observation()
+    res = step(Params(), s, setpoint=21.0, hz=30.0, target_hz=30.0, outdoor_temp=8.0)
+    assert res.mode != MODE_POST_DEFROST
+
