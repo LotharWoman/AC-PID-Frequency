@@ -92,6 +92,9 @@ entity: climate.my_master_indoor_unit
 
 The card looks like the thermostat card (drag dial, +/-, modes) and additionally shows the actual compressor Hz with a bar (target = white), an input field with +/- for the target Hz (limited downwards automatically to the learned minimum Hz), the controller switch with status (incl. defrost, minimum modulation and overheat indication), the learned minimum Hz with a manual reset button, and further indoor units. Clicking a further indoor unit opens its climate dialog (temperature, fan, etc.).
 
+<img width="483" height="517" alt="grafik" src="https://github.com/user-attachments/assets/f83c74b3-738d-4e80-a07d-32ce19e7f1fe" />
+
+
 ## Logo / branding
 
 The logos are in `custom_components/ac_pid_frequency/brand/` (`icon`, `logo`, each with `dark_` and `@2x`). From **Home Assistant 2026.3** they are used from there automatically, without an entry in the brands repository. `icon.png` and `logo.png` in the repository root are for HACS/GitHub; `assets/` holds the banner (`banner.png`, also as `social-preview.png` for the GitHub repo settings) and the SVG sources.
