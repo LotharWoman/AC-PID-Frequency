@@ -92,6 +92,9 @@ entity: climate.mein_master_innengeraet
 
 Die Karte sieht aus wie die Thermostat-Karte (Ziehbogen, +/-, Betriebsarten) und zeigt zusätzlich Kompressor-Ist-Hz mit Balken (Ziel = weiß), Eingabefeld mit +/- für die Ziel-Hz (nach unten automatisch auf die erlernte Mindest-Hz begrenzt), Regler-Schalter mit Status (inkl. Abtau-, Mindestmodulations- und Überhitzungsanzeige), Anzeige der erlernten Mindest-Hz mit manuellem Reset-Button sowie weitere Innengeräte. Ein Klick auf ein weiteres Innengerät öffnet dessen Klima-Dialog (Temperatur, Lüfter usw.).
 
+<img width="483" height="517" alt="grafik" src="https://github.com/user-attachments/assets/3a4434f3-ce00-472d-b91f-f7a3124ac79c" />
+
+
 ## Logo / Branding
 
 Die Logos liegen im Ordner `custom_components/ac_pid_frequency/brand/` (`icon`, `logo`, jeweils `dark_` und `@2x`). Ab **Home Assistant 2026.3** werden sie von dort automatisch genutzt – ohne Eintrag im brands-Repository. Im Repository-Root liegen `icon.png` und `logo.png` für HACS/GitHub, unter `assets/` das Banner (`banner.png`, auch als `social-preview.png` für die GitHub-Repo-Einstellungen) und die SVG-Quellen.
