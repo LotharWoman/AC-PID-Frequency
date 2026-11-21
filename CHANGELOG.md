@@ -1,6 +1,21 @@
 # Changelog
 
-## 2.5.0 (noch nicht veröffentlicht)
+## 2.5.1
+
+### Behoben
+* **Falsch gelernte Mindestmodulation (z. B. 120 Hz):** Die Stagnations-Erkennung hielt eine hohe Frequenz fälschlich für die Mindestmodulation, wenn der Kompressor nicht auf den Sensor reagierte. Das passiert z. B. beim Start des Reglers, während ein anderes Innengerät die Frequenz hochhält. Der Regler hielt danach das „Minimum" von 119,7 Hz und fuhr rund eine Stunde mit Volllast. Zwei Ursachen sind behoben:
+  * Es wird nur noch gelernt, wenn die Frequenz höchstens `min(60 Hz, effektives Ziel + 10 Hz)` beträgt. Läuft der Kompressor weit darüber (Anlauf, Abtauung, anderes Innengerät), ist das keine Mindestmodulation.
+  * Die Stagnation zählt echte Zeit (mindestens 180 s bzw. 2 × Reaktionszeit) statt Takte. Ereignisgetriebene Zusatztakte (z. B. beim Einschalten des Klimageräts) zählten vorher wie volle Minutentakte, sodass die Anlage nach 72 s statt nach 3 Minuten als „stagniert" galt, noch bevor sie auf den Sensor reagieren konnte.
+* Die Stagnationszeit wird bei Pause, Aus und Störung zurückgesetzt (`State.reset_observation()`).
+
+### Tests
+* 4 neue Tests (Nachstellung des Vorfalls, echte Zeit statt Takte, Regelbetrieb lernt weiterhin nach 3 Minutentakten, Reset der Stagnationszeit).
+
+### Intern
+* `step()` nimmt optional `dt_s` (echte Zeit seit dem letzten Schritt) entgegen. Der Controller liefert sie aus der Monotonuhr (begrenzt auf 5 Takte, nach Pause/Start 0).
+* Version in `manifest.json` und in der Karte auf 2.5.1.
+
+## 2.5.0
 
 Änderungen gegenüber 2.4.5. Gelernte Werte bleiben beim Update erhalten, es gibt keine neuen Optionen.
 

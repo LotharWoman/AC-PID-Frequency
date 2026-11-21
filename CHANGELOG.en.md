@@ -1,6 +1,21 @@
 # Changelog
 
-## 2.5.0 (not yet released)
+## 2.5.1
+
+### Fixed
+* **Wrongly learned minimum modulation (e.g. 120 Hz):** The stagnation detection mistook a high frequency for the minimum modulation when the compressor did not respond to the sensor. This happens, for example, when the controller starts while another indoor unit holds the frequency up. The controller then kept the "minimum" of 119.7 Hz and ran at full load for about an hour. Two causes are fixed:
+  * It now only learns if the frequency is at most `min(60 Hz, effective target + 10 Hz)`. If the compressor runs far above that (start-up, defrost, another indoor unit), it is not the minimum modulation.
+  * The stagnation now counts real time (at least 180 s or 2 × reaction time) instead of ticks. Event-driven extra ticks (e.g. when the climate entity is switched on) used to count like full one-minute ticks, so the AC counted as "stagnating" after 72 s instead of 3 minutes, before it could even react to the sensor.
+* The stagnation time is reset on pause, off and fault (`State.reset_observation()`).
+
+### Tests
+* 4 new tests (replay of the incident, real time instead of ticks, normal operation still learns after 3 one-minute ticks, reset of the stagnation time).
+
+### Internal
+* `step()` optionally accepts `dt_s` (real time since the last step). The controller supplies it from the monotonic clock (capped at 5 cycles, 0 after pause/start).
+* Version in `manifest.json` and in the card set to 2.5.1.
+
+## 2.5.0
 
 Changes compared to 2.4.5. Learned values are kept on update, there are no new options.
 
