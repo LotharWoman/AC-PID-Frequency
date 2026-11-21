@@ -507,3 +507,47 @@ def test_reset_observation_cancels_post_defrost_hold():
     res = step(Params(), s, setpoint=21.0, hz=30.0, target_hz=30.0, outdoor_temp=8.0)
     assert res.mode != MODE_POST_DEFROST
 
+
+def test_stagnation_does_not_learn_min_when_compressor_far_above_target():
+    """Nachstellung des Vorfalls: Ein anderes Innengerät hält 120 Hz, der Regler startet mit
+    warmem Sensor. 119,7 Hz darf nie als Mindestmodulation gelernt werden."""
+    s = State()
+    s.output = 20.8
+    p = Params()
+    # Ereignistakt (0 s), regulärer Takt 12 s später, dann Minutentakte
+    for dt in (0.0, 12.0, 60.0, 60.0, 60.0, 60.0, 60.0, 60.0):
+        step(p, s, setpoint=20.0, hz=119.7, target_hz=60.0, outdoor_temp=8.0, dt_s=dt)
+    assert s.learned_min_hz == 18.0
+
+
+def test_stagnation_needs_real_time_not_ticks():
+    """Drei Takte innerhalb weniger Sekunden (Ereignistakte) reichen nicht zum Lernen."""
+    s = State()
+    s.output = 20.0
+    p = Params()
+    for dt in (0.0, 12.0, 12.0, 60.0):  # zusammen 84 s
+        step(p, s, setpoint=20.0, hz=25.0, target_hz=20.0, outdoor_temp=8.0, dt_s=dt)
+    assert s.learned_min_hz == 18.0
+    for dt in (60.0, 60.0):  # zusammen 204 s
+        step(p, s, setpoint=20.0, hz=25.0, target_hz=20.0, outdoor_temp=8.0, dt_s=dt)
+    assert s.learned_min_hz == 25.0
+
+
+def test_stagnation_still_learns_min_after_three_regular_ticks():
+    """Regelbetrieb im Minutentakt: Die Mindestmodulation wird wie bisher nach 3 Takten gelernt."""
+    s = State()
+    s.output = 20.0
+    p = Params()
+    for _ in range(2):
+        step(p, s, setpoint=20.0, hz=25.0, target_hz=20.0, outdoor_temp=8.0)
+    assert s.learned_min_hz == 18.0
+    step(p, s, setpoint=20.0, hz=25.0, target_hz=20.0, outdoor_temp=8.0)
+    assert s.learned_min_hz == 25.0
+
+
+def test_reset_observation_clears_stagnation_timer():
+    s = State()
+    s.low_hz_stagnation_s = 150.0
+    s.reset_observation()
+    assert s.low_hz_stagnation_s == 0.0
+

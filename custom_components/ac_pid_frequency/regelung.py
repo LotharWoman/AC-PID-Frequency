@@ -115,6 +115,7 @@ DEFAULT_LEARNED_OFFSETS: dict[str, dict[str, float]] = {
 MIN_HZ_LEARN_FLOOR = 10.0   # darunter wird nichts gelernt
 MIN_HZ_LEARN_CEIL = 60.0    # darüber ist ein Stopp kein Mindestmodulations-Hinweis
 MIN_HZ_LEARN_MARGIN = 10.0  # letzte Hz höchstens so viel über dem Ziel
+STAGNATION_MIN_S = 180.0    # Sekunden, die die Stagnation mindestens anhalten muss (echte Zeit)
 
 DEFAULT_MIN_HZ_MAP: dict[str, float] = {
     OUTDOOR_BIN_COLD: 24.0,    # Frost: Mindestgrenze herstellerseitig oft höher
@@ -227,7 +228,7 @@ class State:
 
     # Beobachtungen vor Abschaltung / Stagnation
     last_running_hz: float | None = None
-    low_hz_stagnation_count: int = 0
+    low_hz_stagnation_s: float = 0.0
     effective_target_hz: float = 30.0
 
     @property
@@ -264,6 +265,7 @@ class State:
         self.was_defrosting = False
         self.post_defrost_remaining = 0.0
         self.last_running_hz = None
+        self.low_hz_stagnation_s = 0.0
 
     def reset_learning(self, min_hz_defaults: dict | None = None) -> None:
         """Setzt alle gelernten Tabellen und Anlageneigenschaften auf Werkseinstellungen zurück."""
@@ -275,7 +277,7 @@ class State:
         self.stable_cycles = 0
         self.last_step_delta = 0.0
         self.hz_at_last_step = None
-        self.low_hz_stagnation_count = 0
+        self.low_hz_stagnation_s = 0.0
         self.last_running_hz = None
         self.min_mod_steady_seconds = 0.0
         self.last_outdoor_temp_learned = None
@@ -285,7 +287,7 @@ class State:
         self.learned_min_table = copy.deepcopy(min_hz_defaults or DEFAULT_MIN_HZ_MAP)
         self.learned_min_offset_table = copy.deepcopy(DEFAULT_MIN_OFFSET_MAP)
         self.min_mod_steady_seconds = 0.0
-        self.low_hz_stagnation_count = 0
+        self.low_hz_stagnation_s = 0.0
         self.last_outdoor_temp_learned = None
 
     def load_learned_data(self, data: dict) -> None:
@@ -384,8 +386,15 @@ def step(
     room_temp: float | None = None,
     defrost: bool = False,
     real_room_temp: float | None = None,
+    dt_s: float | None = None,
 ) -> Result:
-    """Führt einen intelligenten, selbstlernenden Regelschritt aus."""
+    """Führt einen intelligenten, selbstlernenden Regelschritt aus.
+
+    dt_s: echte Zeit seit dem letzten Regelschritt in Sekunden (None = Regeltakt). Wird nur für
+    die Stagnations-Erkennung genutzt, damit ereignisgetriebene Zusatztakte nicht wie volle
+    Takte zählen.
+    """
+    elapsed_s = p.interval_s if dt_s is None else max(0.0, dt_s)
     s.time_since_last_step += p.interval_s
 
     outdoor_bin = get_outdoor_bin(outdoor_temp)
@@ -418,7 +427,7 @@ def step(
             # und ruhig einmalig ausgehen kann zum Neulernen
             s.learned_min_table[outdoor_bin] = p.default_min_hz(outdoor_bin)
         s.min_mod_steady_seconds = 0.0
-        s.low_hz_stagnation_count = 0
+        s.low_hz_stagnation_s = 0.0
         s.stable_cycles = 0
         s.time_since_last_step = s.learned_reaction_time
 
@@ -703,18 +712,28 @@ def step(
     # ==================================================================
     # 8. ERKENNUNG VON MINDESTMODULATIONS-STAGNATION
     # ==================================================================
-    if err < -p.deadband_hz and current_offset <= 0.1 and abs(s.trend) < 0.5:
-        s.low_hz_stagnation_count += 1
-        if s.low_hz_stagnation_count >= 3:
+    # Nur bei plausibler Frequenz: Läuft der Kompressor weit über dem Ziel (Anlauf, Abtauung,
+    # anderes Innengerät), reagiert er nicht auf den Sensor, ist aber keine Mindestmodulation.
+    stagnation_hz_ok = hz <= min(MIN_HZ_LEARN_CEIL, effective_target + MIN_HZ_LEARN_MARGIN)
+    if (
+        err < -p.deadband_hz
+        and current_offset <= 0.1
+        and abs(s.trend) < 0.5
+        and stagnation_hz_ok
+    ):
+        # Echte Zeit statt Takte: Die Anlage braucht mehrere Minuten, bis sie auf den Sensor
+        # reagiert, und Ereignis-Zusatztakte dürfen nicht wie volle Takte zählen.
+        s.low_hz_stagnation_s += elapsed_s
+        if s.low_hz_stagnation_s >= max(STAGNATION_MIN_S, 2.0 * s.learned_reaction_time):
             s.learned_min_table[outdoor_bin] = max(
                 p.default_min_hz(outdoor_bin), round(hz, 1)
             )
             s.learned_min_offset_table[outdoor_bin] = max(0.1, current_offset)
             effective_target = s.learned_min_hz
             err = effective_target - hz
-            s.low_hz_stagnation_count = 0
+            s.low_hz_stagnation_s = 0.0
     else:
-        s.low_hz_stagnation_count = 0
+        s.low_hz_stagnation_s = 0.0
 
     # ==================================================================
     # 9. REGELSCHRITT-ENTSCHEIDUNG

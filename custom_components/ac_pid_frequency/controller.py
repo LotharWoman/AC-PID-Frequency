@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -97,6 +98,7 @@ class AcPidFrequencyController:
         )
         self._unsubs: list = []
         self._fault_since: datetime | None = None
+        self._last_eval_mono: float | None = None  # echte Zeit zwischen Regelschritten
         # Mindest-Hz-Einstellungen, auf denen die gelernte Tabelle beruht (wird mitgespeichert)
         self._min_hz_cfg: dict[str, float] = dict(DEFAULT_MIN_HZ_MAP)
         self._last_snapshot: str | None = None  # zuletzt gespeicherter Stand (Schreiblast sparen)
@@ -316,6 +318,14 @@ class AcPidFrequencyController:
         defrost = self._read_defrost(climate if climate_ok else None)
 
         self._fault_since = None
+        now_mono = time.monotonic()
+        # Erster Schritt nach Pause/Start: keine Zeit anrechnen, sonst auf 5 Takte begrenzen
+        dt_s = (
+            0.0
+            if self._last_eval_mono is None
+            else min(max(now_mono - self._last_eval_mono, 0.0), 5.0 * self.params.interval_s)
+        )
+        self._last_eval_mono = now_mono
         result = step(
             self.params,
             self.regelung,
@@ -326,6 +336,7 @@ class AcPidFrequencyController:
             room_temp=room_temp,
             defrost=defrost,
             real_room_temp=self._configured_room_temp(),
+            dt_s=dt_s,
         )
         self.available = True
         self.passthrough = False
@@ -404,6 +415,7 @@ class AcPidFrequencyController:
         # Nach Pause/Aus nicht aus alten Beobachtungen lernen (z. B. Kompressor-Stopp beim
         # Abschalten oder die Reaktion auf einen Schritt vor der Pause)
         self.regelung.reset_observation()
+        self._last_eval_mono = None
 
     def _handle_missing_data(self) -> None:
         """Eingangsdaten fehlen: erst Wert halten, nach Zeitlimit unavailable."""
@@ -423,5 +435,6 @@ class AcPidFrequencyController:
             self.output = self.offset = self.error_hz = None
             self.status = STATUS_FAULT
             self.regelung.reset_observation()
+            self._last_eval_mono = None
         else:
             self.status = STATUS_WAITING
